@@ -1,5 +1,6 @@
 import { SHOP_LOGIN_PASSWORD, passwordMatches } from "./shop-password.js";
 import { mountAndroidDownload } from "./android-download.js";
+import { mountStoreDownload } from "./store-download.js";
 import { attendanceLocation } from "./attendance-location.js";
 import { dailyAttendanceHours, totalAttendanceHours } from "./attendance-hours.js";
 import express from "express";
@@ -308,6 +309,7 @@ function manager(req, res, next) {
   next();
 }
 app.use("/api/v1/manager", manager);
+mountStoreDownload(app);
 async function allowed(c, a, shopId) {
   if (companyAdmin(a)) return true;
   if (a.role === "SHOP")
@@ -1193,11 +1195,11 @@ app.get("/api/v1/shops/:shopId/employees/:workerId", async (req, res) => {
   if (!shop) fail(404, "Shop not found");
   await assertShop(pool, req.account, shop.id);
   const worker = (await pool.query(
-    "SELECT a.login_code AS \"workerId\",a.name,a.requires_manager_approval FROM workers w JOIN accounts a ON a.id=w.account_id WHERE a.login_code=$1 AND a.role='WORKER' AND a.status='ACTIVE'",
+    "SELECT a.login_code AS \"workerId\",a.name,a.requires_manager_approval,a.approved_at FROM workers w JOIN accounts a ON a.id=w.account_id WHERE a.login_code=$1 AND a.role='WORKER' AND a.status='ACTIVE'",
     [workerId],
   )).rows[0];
   if (!worker) fail(404, "Employee not found", "EMPLOYEE_NOT_FOUND");
-  if (worker.requires_manager_approval) fail(403, "Manager approval required", "MANAGER_APPROVAL_REQUIRED");
+  if (worker.requires_manager_approval && !worker.approved_at) fail(403, "Manager approval required", "MANAGER_APPROVAL_REQUIRED");
   res.json({ data: { shopId, workerId: worker.workerId, name: worker.name } });
 });
 app.get("/api/v1/attendance/status", async (req, res) => {

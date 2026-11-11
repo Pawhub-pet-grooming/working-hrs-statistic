@@ -248,6 +248,17 @@ Attendance rows, immutable photo associations and adjustment history are retaine
 
 ## Android App download page
 
+Store App has a separate download page in the sidebar footer for Manager,
+General manager and Owner. The authenticated API
+`/api/v1/manager/downloads/store-android` returns metadata; POST to its `/link`
+endpoint issues a five-minute S3 download link. Other roles cannot request links.
+Set `STORE_APK_BUCKET` to the private APK bucket and grant the backend role
+`s3:GetObject` on `store-releases/pawhub-v1.0.5-rc2.apk`. Release metadata is pinned
+in `releases/store-android-1.0.5-rc2.json`. Keep Block Public Access and encryption
+enabled and use HTTPS. Anyone holding a download link can use it until expiry.
+The public personal App remains v1.0.4: do not replace `android.json` or the
+public `/appdownload` page when publishing Store App.
+
 The public page `/appdownload` and the shared Download Android App sidebar utility provide APK version, build date, size, SHA-256 and installation instructions. GET `/api/v1/downloads/android` returns available installer metadata; GET `/api/v1/downloads/android/apk?sha256=...` serves a hash-pinned APK with a friendly filename and Android package MIME type. No login is required to install the app.
 
 Publish an existing Android build from the repository root:

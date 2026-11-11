@@ -1,0 +1,13 @@
+{
+    "releaseName":  "1.0.5-rc2",
+    "versionName":  "1.0.5",
+    "versionCode":  6,
+    "applicationId":  "com.example.pawhub_signin_app",
+    "buildType":  "release",
+    "minSdk":  26,
+    "sizeBytes":  6673320,
+    "sha256":  "9742086f987dcc73d1654446befe56927e4bbf9d7a5b6174d3211c69f7bc6726",
+    "builtAt":  "2026-11-10T23:48:39.7368586Z",
+    "certificateSha256":  "f739289d76a89520d973cc4675a8145167dbf90dd5f3fee5977a169884c98508",
+    "objectKey":  "store-releases/pawhub-v1.0.5-rc2.apk"
+}

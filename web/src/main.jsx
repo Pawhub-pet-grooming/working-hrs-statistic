@@ -3,6 +3,7 @@ import { operationId } from "./operationId.js";
 import SiteSettings, { useSiteLanguage } from "./SiteSettings.jsx";
 import { attendanceSelectionForDay } from "./attendanceSelection.js";
 import AndroidDownloadPage from "./AndroidDownloadPage.jsx";
+import StoreDownloadPage from "./StoreDownloadPage.jsx";
 import AttendanceLocationPage from "./AttendanceLocationPage.jsx";
 import WorkspaceLayout from "./WorkspaceLayout.jsx";
 import OrganizationPage from "./OrganizationPage.jsx";
@@ -413,6 +414,7 @@ function App() {
                     Organization: t("Structure", "公司体系"),
                     Locations: t("Attendance GPS", "签到定位"),
                     Download: t("Download Android App", "下载 Android App"),
+                    StoreDownload: t("Download Store App", "下载门店 App"),
                   }[page]
                 }
               </h1>
@@ -643,6 +645,7 @@ function App() {
             onChanged={message => { setNotice(message); setRefresh(x => x + 1); }} />}
           {page === "Settings" && <SiteSettings language={language} onLanguage={setLanguage} />}
           {page === "Download" && <AndroidDownloadPage language={language} />}
+          {page === "StoreDownload" && ["MANAGER", "GENERAL_MANAGER", "SUPER_MANAGER"].includes(me.role) && <StoreDownloadPage api={api} language={language} />}
           {page === "Locations" && ["GENERAL_MANAGER","SUPER_MANAGER"].includes(me.role) && <AttendanceLocationPage key={refresh} api={api} language={language} />}
           {page === "Organization" && <OrganizationPage account={me} api={api} onChanged={() => setRefresh(x => x + 1)} />}
 
