@@ -63,13 +63,13 @@ export function mountOrganization(app, { z, uuid, pool, transaction, idem, fail,
       const person = (await c.query("SELECT * FROM accounts WHERE id=$1 FOR UPDATE", [b.accountId])).rows[0];
       if (!person || !["MANAGER", "WORKER"].includes(person.role) || person.status === "DISABLED") fail(422, "Choose a manager or groomer");
       let code = person.login_code;
+      if ((!code || !/^[1-9][0-9]{3}$/.test(code)) && (person.status === "ACTIVE" || b.role === "MANAGER")) {
+        const used = new Set((await c.query("SELECT login_code FROM accounts WHERE login_code ~ '^[1-9][0-9]{3}$'")).rows.map(r => r.login_code));
+        const available = Array.from({ length: 9000 }, (_, i) => String(i + 1000)).filter(v => !used.has(v));
+        if (!available.length) fail(409, "Employee IDs exhausted");
+        code = available[randomInt(available.length)];
+      }
       if (b.role === "WORKER") {
-        if ((!code || !/^[1-9][0-9]{3}$/.test(code)) && person.status === "ACTIVE") {
-          const used = new Set((await c.query("SELECT login_code FROM accounts WHERE login_code ~ '^[1-9][0-9]{3}$'")).rows.map(r => r.login_code));
-          const available = Array.from({ length: 9000 }, (_, i) => String(i + 1000)).filter(v => !used.has(v));
-          if (!available.length) fail(409, "Employee IDs exhausted");
-          code = available[randomInt(available.length)];
-        }
         if (person.status !== "ACTIVE" && code && !/^[1-9][0-9]{3}$/.test(code)) code = null;
         await c.query("INSERT INTO workers(account_id,contact,address) VALUES($1,$2,$3) ON CONFLICT(account_id) DO NOTHING", [person.id, person.profile_phone, person.profile_address]);
         await c.query("DELETE FROM account_shops WHERE account_id=$1", [person.id]);

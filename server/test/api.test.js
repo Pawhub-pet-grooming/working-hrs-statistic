@@ -1160,7 +1160,7 @@ test(
       assert.ok(generalQueue.some(j => j.item_type === "PERSON_APPROVAL" && j.account_id === pendingManager.data.data.accountId));
       const approvedManager = await post(`/manager/accounts/${pendingManager.data.data.accountId}/approve`, { operationId: randomUUID() }, generalToken);
       assert.equal(approvedManager.status, 200);
-      assert.equal(approvedManager.data.data.workerId, null);
+      assert.match(approvedManager.data.data.workerId, /^[1-9]\d{3}$/);
       assert.equal((await pool.query("SELECT status FROM accounts WHERE id=$1", [pendingManager.data.data.accountId])).rows[0].status, "ACTIVE");
       const appointment = { operationId: randomUUID(), expectedVersion: await organizationVersion(), accountId: secondManager.id };
       assert.equal((await post(orgPath + "/general-manager", appointment, generalToken)).status, 403);

@@ -454,7 +454,7 @@ app.get("/api/v1/manager/workers", async (req, res) => {
 app.get("/api/v1/manager/managers", async (req, res) => {
   if (!companyAdmin(req.account)) fail(403, "Company administrator required");
   const r = await pool.query(
-    `SELECT a.id AS "accountId",a.role,a.name,a.email,a.status,a.first_name AS "firstName",a.last_name AS "lastName",a.profile_address AS address,a.profile_phone AS phone,a.profile_version AS version,sa.login_code AS "preferredShopId" FROM accounts a LEFT JOIN shops ps ON ps.id=a.preferred_shop_id LEFT JOIN accounts sa ON sa.id=ps.account_id WHERE a.role IN('MANAGER','GENERAL_MANAGER') ORDER BY a.name`,
+    `SELECT a.id AS "accountId",a.role,a.name,a.email,a.status,a.login_code AS "employeeCode",a.requires_manager_approval,(a.password_hash IS NOT NULL) AS password_set,a.first_name AS "firstName",a.last_name AS "lastName",a.profile_address AS address,a.profile_phone AS phone,a.profile_version AS version,sa.login_code AS "preferredShopId" FROM accounts a LEFT JOIN shops ps ON ps.id=a.preferred_shop_id LEFT JOIN accounts sa ON sa.id=ps.account_id WHERE a.role IN('MANAGER','GENERAL_MANAGER') ORDER BY a.name`,
   );
   res.json({ data: r.rows });
 });
@@ -542,18 +542,15 @@ app.post(
         const firstName = b.firstName || b.name;
         const lastName = b.lastName || "";
         const name = [firstName, lastName].filter(Boolean).join(" ");
-        let code = null;
-        if (!isManager) {
-          await c.query("SELECT pg_advisory_xact_lock(820013)");
-          const codes = (
-            await c.query("SELECT login_code FROM accounts WHERE login_code ~ '^[1-9][0-9]{3}$'")
-          ).rows.map((x) => x.login_code);
-          const available = [];
-          for (let i = 1000; i <= 9999; i++)
-            if (!codes.includes(String(i))) available.push(String(i));
-          if (!available.length) fail(409, "Worker IDs exhausted");
-          code = available[randomInt(available.length)];
-        }
+        await c.query("SELECT pg_advisory_xact_lock(820013)");
+        const codes = (
+          await c.query("SELECT login_code FROM accounts WHERE login_code ~ '^[1-9][0-9]{3}$'")
+        ).rows.map((x) => x.login_code);
+        const available = [];
+        for (let i = 1000; i <= 9999; i++)
+          if (!codes.includes(String(i))) available.push(String(i));
+        if (!available.length) fail(409, "Employee IDs exhausted");
+        const code = available[randomInt(available.length)];
         const a = (
           await c.query(
             "INSERT INTO accounts(role,login_code,email,name,first_name,last_name,profile_address,profile_phone,preferred_shop_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",

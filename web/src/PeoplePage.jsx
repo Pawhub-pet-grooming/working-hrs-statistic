@@ -15,8 +15,8 @@ export default function PeoplePage({ account, workers, managers, shops, api, bus
   });
   const table = (people, kind) => <Table
     headers={["First name", "Last name", "Employee ID", "Registered email", "Address", "Phone", "Preferred store", "Status", "Actions"]}
-    rows={people.filter(p => (showDeleted || p.status !== "DISABLED") && [p.firstName, p.lastName, p.name, p.email, p.workerId].some(value => String(value || "").toLowerCase().includes(search.trim().toLowerCase()))).map(p => [
-      p.firstName || p.name, p.lastName || "—", kind === "worker" ? p.workerId || "Pending assignment" : "—",
+    rows={people.filter(p => (showDeleted || p.status !== "DISABLED") && [p.firstName, p.lastName, p.name, p.email, p.workerId, p.employeeCode].some(value => String(value || "").toLowerCase().includes(search.trim().toLowerCase()))).map(p => [
+      p.firstName || p.name, p.lastName || "—", (kind === "worker" ? p.workerId : p.employeeCode) || "Pending assignment",
       p.email, p.address || "—", p.phone || "—", storeName(p.preferredShopId),
       p.status === "DISABLED" ? "Deleted" : p.status,
       <div className="d-flex gap-2">
@@ -98,7 +98,7 @@ function PersonDialog({ mode, person, kind, owner, createdByOwner, shops, api, o
         <p className="text-secondary">The account will be disabled and signed out. Attendance records, photos and history will be retained.</p>
       </> : <fieldset disabled={saving || frozen || conflict}>
         {mode === "EDIT" && <div className="mb-4"><div className="text-secondary small">Registered email</div><div>{person.email}</div>
-          <div className="text-secondary small mt-2">{kind === "worker" ? `Employee ID: ${person.workerId || "Pending assignment"}` : "Manager account"}</div></div>}
+          <div className="text-secondary small mt-2">Employee ID: {(kind === "worker" ? person.workerId : person.employeeCode) || "Pending assignment"}</div></div>}
         <div className="row g-3">
           {mode === "ADD" && input("email", "Registered email", "email", true, 254)}
           {mode === "ADD" && <label className="col-md-6 form-label">Role
