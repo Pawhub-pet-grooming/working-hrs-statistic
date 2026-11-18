@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import argon2 from 'argon2';
@@ -6,7 +6,9 @@ import sharp from 'sharp';
 import {pool} from '../src/db.js';
 import {app} from '../src/app.js';
 
-test('Store selfie upload, attendance, retry and real record query stay scoped to the signed-in store', {skip:!process.env.TEST_DATABASE_URL}, async()=>{
+after(() => pool.end());
+for (const role of ['WORKER', 'MANAGER']) {
+test(role + ': store selfie upload, attendance, retry and real record query stay scoped to the signed-in store', {skip:!process.env.TEST_DATABASE_URL}, async()=>{
  assert.ok(new URL(process.env.TEST_DATABASE_URL).pathname.endsWith('_test'));
  await pool.query('TRUNCATE accounts CASCADE');
  const password=await argon2.hash('test-worker-password');
@@ -14,8 +16,13 @@ test('Store selfie upload, attendance, retry and real record query stay scoped t
   const a=(await pool.query("INSERT INTO accounts(role,login_code,name,password_hash,status) VALUES('SHOP',$1,$2,$3,'ACTIVE') RETURNING id",[code,name,password])).rows[0];
   await pool.query("INSERT INTO shops(account_id,name,address,latitude,longitude) VALUES($1,$2,'Test',0,0)",[a.id,name]);
  }
- const worker=(await pool.query("INSERT INTO accounts(role,login_code,email,name,password_hash,status,requires_manager_approval) VALUES('WORKER','1234','store-worker@test.invalid','Store Worker',$1,'ACTIVE',false) RETURNING id",[password])).rows[0];
- await pool.query('INSERT INTO workers(account_id) VALUES($1)',[worker.id]);
+ const worker=(await pool.query("INSERT INTO accounts(role,login_code,email,name,password_hash,status,requires_manager_approval) VALUES($2,'1234','store-worker@test.invalid','Store Worker',$1,'ACTIVE',false) RETURNING id",[password,role])).rows[0];
+  if (role === 'MANAGER') {
+   const { readFile } = await import('node:fs/promises');
+   await pool.query(await readFile(new URL('../migrations/019.sql', import.meta.url), 'utf8'));
+ } else {
+   await pool.query('INSERT INTO workers(account_id) VALUES($1)',[worker.id]);
+ }
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  const base=`http://127.0.0.1:${server.address().port}/api/v1`;
  let token;
@@ -40,5 +47,7 @@ test('Store selfie upload, attendance, retry and real record query stay scoped t
   const edit=await request('/attendance-adjustments',{operationId:randomUUID(),action:'UPDATE',recordId:signed.data.data.recordId,expectedVersion:1,type:'SIGN_IN',occurredAt:status.serverTime});
   assert.equal(edit.status,201,JSON.stringify(edit.data));assert.equal(edit.data.data.validationStatus,'PENDING');
   const changed=await request(`/attendance?shopId=0001&workerId=1234&fromDate=${status.localDate}&toDate=${status.localDate}`);assert.equal(changed.data.data.items[0].pending,true);
- }finally{await new Promise(r=>server.close(r));await pool.end();}
+ }finally{await new Promise(r=>server.close(r));}
 });
+
+}

@@ -4,7 +4,7 @@ import argon2 from 'argon2';
 import { pool } from '../src/db.js';
 import { app } from '../src/app.js';
 
-test('Shop employee lookup requires the owning shop and an active approved worker', {skip: !process.env.TEST_DATABASE_URL}, async () => {
+test('Shop employee lookup requires the owning shop and active approved workers and managers', {skip: !process.env.TEST_DATABASE_URL}, async () => {
   assert.ok(new URL(process.env.TEST_DATABASE_URL).pathname.endsWith('_test'));
   await pool.query('TRUNCATE accounts CASCADE');
   const hash = await argon2.hash('lookup-test-password');
@@ -26,6 +26,21 @@ test('Shop employee lookup requires the owning shop and an active approved worke
     const result = await get('/shops/0001/employees/1234', token);
     assert.equal(result.status, 200);
     assert.deepEqual((await result.json()).data, {shopId: '0001', workerId: '1234', name: 'Real Employee'});
+    const manager = (await pool.query("INSERT INTO accounts(role,login_code,name,email,password_hash,status,requires_manager_approval,approved_at) VALUES('MANAGER','1000','Test Manager','lookup-manager@test.invalid',$1,'ACTIVE',true,now()) RETURNING id", [hash])).rows[0];
+    const { readFile } = await import('node:fs/promises');
+    const migration = await readFile(new URL('../migrations/019.sql', import.meta.url), 'utf8');
+    await pool.query(migration);
+    await pool.query(migration);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM workers WHERE account_id=$1', [manager.id])).rows[0].count, 1);
+    const managerLookup = await get('/shops/0001/employees/1000', token);
+    assert.equal(managerLookup.status, 200);
+    assert.deepEqual((await managerLookup.json()).data, {shopId: '0001', workerId: '1000', name: 'Test Manager'});
+    await pool.query("UPDATE accounts SET approved_at=NULL WHERE id=$1", [manager.id]);
+    assert.equal((await get('/shops/0001/employees/1000', token)).status, 403);
+    await pool.query("UPDATE accounts SET status='PENDING' WHERE id=$1", [manager.id]);
+    assert.equal((await get('/shops/0001/employees/1000', token)).status, 404);
+    await pool.query("UPDATE accounts SET status='DISABLED' WHERE id=$1", [manager.id]);
+    assert.equal((await get('/shops/0001/employees/1000', token)).status, 404);
     assert.equal((await get('/shops/0001/employees/9999', token)).status, 404);
     assert.equal((await get('/shops/0001/employees/abc', token)).status, 422);
     await pool.query("UPDATE accounts SET status='DISABLED' WHERE id=$1", [worker.id]);

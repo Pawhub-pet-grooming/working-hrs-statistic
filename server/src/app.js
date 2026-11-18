@@ -562,11 +562,10 @@ app.post(
             ],
           )
         ).rows[0];
-        if (!isManager)
-          await c.query(
-            "INSERT INTO workers(account_id,contact,address) VALUES($1,$2,$3)",
-            [a.id, b.phone ?? b.contact ?? "", b.address || ""],
-          );
+        await c.query(
+          "INSERT INTO workers(account_id,contact,address) VALUES($1,$2,$3)",
+          [a.id, b.phone ?? b.contact ?? "", b.address || ""],
+        );
         for (const s of shops)
           await c.query(
             "INSERT INTO account_shops(account_id,shop_id) VALUES($1,$2)",
@@ -1192,7 +1191,7 @@ app.get("/api/v1/shops/:shopId/employees/:workerId", async (req, res) => {
   if (!shop) fail(404, "Shop not found");
   await assertShop(pool, req.account, shop.id);
   const worker = (await pool.query(
-    "SELECT a.login_code AS \"workerId\",a.name,a.requires_manager_approval,a.approved_at FROM workers w JOIN accounts a ON a.id=w.account_id WHERE a.login_code=$1 AND a.role='WORKER' AND a.status='ACTIVE'",
+    "SELECT a.login_code AS \"workerId\",a.name,a.requires_manager_approval,a.approved_at FROM workers w JOIN accounts a ON a.id=w.account_id WHERE a.login_code=$1 AND a.role IN('WORKER','MANAGER') AND a.status='ACTIVE'",
     [workerId],
   )).rows[0];
   if (!worker) fail(404, "Employee not found", "EMPLOYEE_NOT_FOUND");
