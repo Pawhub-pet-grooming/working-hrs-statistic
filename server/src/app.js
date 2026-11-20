@@ -384,7 +384,7 @@ app.get(["/api/v1/shops", "/api/v1/manager/shops"], async (req, res) => {
       'SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id WHERE s.account_id=$1',
       [req.account.id],
     );
-  else if (req.account.role === "WORKER")
+  else if (req.account.role === "WORKER" || (req.path === "/api/v1/shops" && backend.includes(req.account.role)))
     r = await pool.query(
       'SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id',
     );
@@ -948,7 +948,7 @@ app.post("/api/v1/manager/attendance/:id/corrections", async (req, res) => {
   return attendanceAdjustment(req, res);
 });
 app.post("/api/v1/attendance", async (req, res) => {
-  if (!["SHOP", "WORKER"].includes(req.account.role))
+  if (!["SHOP", "WORKER", ...backend].includes(req.account.role))
     fail(403, "App account required");
   const b = z
     .object({
@@ -988,7 +988,7 @@ app.post("/api/v1/attendance", async (req, res) => {
         )
       ).rows[0];
       if (!w || !s) fail(422, "Unknown worker or shop");
-      if (req.account.role === "WORKER") {
+      if (req.account.role !== "SHOP") {
         if (w.account_id !== req.account.id)
           fail(403, "Cannot sign for another worker");
       } else await assertShop(c, req.account, s.id);
@@ -1018,7 +1018,7 @@ app.post("/api/v1/attendance", async (req, res) => {
       let position = {
         status: req.account.role === "SHOP" ? "NOT_APPLICABLE" : "UNAVAILABLE",
       };
-      if (req.account.role === "WORKER" && b.location?.status === "AVAILABLE") {
+      if (req.account.role !== "SHOP" && b.location?.status === "AVAILABLE") {
         const rad = (n) => (n * Math.PI) / 180,
           lat = b.location.latitude,
           lon = b.location.longitude;
@@ -1155,7 +1155,7 @@ async function appScope(req, c, shopCode, workerCode, allowAllShops = false) {
   if (backend.includes(req.account.role)) await c.query("INSERT INTO workers(account_id,contact,address) VALUES($1,$2,$3) ON CONFLICT(account_id) DO NOTHING", [req.account.id, req.account.profile_phone, req.account.profile_address]);
   const w = (
     await c.query(
-      "SELECT w.*,a.login_code FROM workers w JOIN accounts a ON a.id=w.account_id WHERE ($1::text IS NOT NULL AND a.login_code=$1) OR ($1::text IS NULL AND a.id=$2 AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER'))",
+      "SELECT w.*,a.login_code,a.status AS account_status FROM workers w JOIN accounts a ON a.id=w.account_id WHERE ($1::text IS NOT NULL AND a.login_code=$1) OR ($1::text IS NULL AND a.id=$2 AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER'))",
       [workerCode || null, req.account.id],
     )
   ).rows[0];
@@ -1165,6 +1165,7 @@ async function appScope(req, c, shopCode, workerCode, allowAllShops = false) {
       [shopCode],
     )
   ).rows[0];
+  if (w && req.account.role === "SHOP" && w.account_status !== "ACTIVE") fail(404, "Active employee required");
   if (!w || (!s && !(allowAllShops && !shopCode && req.account.role !== "SHOP"))) fail(422, "Unknown worker or shop");
   if (["WORKER", ...backend].includes(req.account.role)) {
     if (w.account_id !== req.account.id) fail(403, "Only your own records");
@@ -1239,10 +1240,10 @@ async function attendanceStores(c, value) {
   if(rows.length!==codes.length) fail(422,"Unknown store");
   return {shopIds:rows.map(r=>r.id),s:{name:rows.map(r=>r.name).join(", "),id:rows.length===1?rows[0].id:null}};
 }
-async function staffAttendanceScope(c, actor, shopCodes, workerCodes) {
+async function staffAttendanceScope(c, actor, shopCodes, workerCodes, includeDeleted = true) {
   await c.query("INSERT INTO workers(account_id,contact,address) VALUES($1,'','') ON CONFLICT(account_id) DO NOTHING",[actor.id]);
   const codes=selectedCodes(workerCodes,/^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/);
-  const available=(await c.query(`SELECT w.id,a.id AS account_id,a.name,a.login_code FROM workers w JOIN accounts a ON a.id=w.account_id WHERE ($1 IN('GENERAL_MANAGER','SUPER_MANAGER') AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER')) OR (a.role='WORKER' AND EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2 AND mw.worker_id=w.id)) OR a.id=$2 ORDER BY a.name`,[actor.role,actor.id])).rows;
+  const available=(await c.query(`SELECT w.id,a.id AS account_id,a.name,a.login_code,a.status FROM workers w JOIN accounts a ON a.id=w.account_id WHERE ($1 IN('GENERAL_MANAGER','SUPER_MANAGER') AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER')) OR (a.role='WORKER' AND EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2 AND mw.worker_id=w.id)) OR a.id=$2 ORDER BY a.name`,[actor.role,actor.id])).rows;
   const chosenShops=selectedCodes(shopCodes,/^00\d{2}$/);
   if(actor.role==='MANAGER' && codes.length && chosenShops.length===1){
     const permitted=(await c.query("SELECT 1 FROM account_shops x JOIN shops s ON s.id=x.shop_id JOIN accounts a ON a.id=s.account_id WHERE x.account_id=$1 AND a.login_code=$2",[actor.id,chosenShops[0]])).rowCount;
@@ -1252,7 +1253,7 @@ async function staffAttendanceScope(c, actor, shopCodes, workerCodes) {
     }
   }
   if(codes.some(code=>!available.some(r=>r.login_code===code || code==='__worker__'+r.id || (code==='__self__'&&r.account_id===actor.id)))) fail(403,"Staff outside your managed groomers");
-  const staff=codes.length?available.filter(r=>codes.includes(r.login_code)||codes.includes('__worker__'+r.id)||(codes.includes('__self__')&&r.account_id===actor.id)):available;
+  const staff=codes.length?available.filter(r=>codes.includes(r.login_code)||codes.includes('__worker__'+r.id)||(codes.includes('__self__')&&r.account_id===actor.id)):available.filter(r=>includeDeleted || r.status==='ACTIVE');
   return {...await attendanceStores(c,shopCodes),workerIds:staff.map(r=>r.id),staffName:codes.length?staff.map(r=>r.name).join(", "):"All accessible staff",staffCode:staff.length===1?staff[0].login_code:null};
 }
 async function personalAttendanceScope(c,req,shopCodes,workerCodes) {
@@ -1267,7 +1268,7 @@ async function personalAttendanceScope(c,req,shopCodes,workerCodes) {
 app.get("/api/v1/manager/staff-attendance/staff", async (req, res) => {
   await pool.query("INSERT INTO workers(account_id,contact,address) VALUES($1,'','') ON CONFLICT(account_id) DO NOTHING",[req.account.id]);
   const staff=(await pool.query(`SELECT w.id,a.name,COALESCE(a.login_code,CASE WHEN a.id=$2 THEN '__self__' ELSE '__worker__'||w.id::text END) AS "workerId",a.status FROM workers w JOIN accounts a ON a.id=w.account_id WHERE (($1 IN('GENERAL_MANAGER','SUPER_MANAGER') AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER')) OR (a.role='WORKER' AND EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2 AND mw.worker_id=w.id))) OR a.id=$2 ORDER BY a.name`,[req.account.role,req.account.id])).rows;
-  res.json({data:staff});
+  res.json({data:req.query.includeDeleted === "true" ? staff.filter(p=>["ACTIVE","DISABLED"].includes(p.status)) : staff.filter(p=>p.status === "ACTIVE")});
 });
 app.get("/api/v1/manager/attendance/locations", async(req,res)=>{
   if(!companyAdmin(req.account))fail(403,"General manager or Owner required");
@@ -1291,7 +1292,7 @@ function attendanceDays(records, staffMode) {
 app.get(["/api/v1/attendance", "/api/v1/manager/staff-attendance"], async (req, res) => {
   const staffMode = req.path.startsWith("/api/v1/manager/");
   let scope;
-  if (staffMode) scope = await staffAttendanceScope(pool, req.account, req.query.shopIds ?? req.query.shopId, req.query.workerIds ?? req.query.workerId);
+  if (staffMode) scope = await staffAttendanceScope(pool, req.account, req.query.shopIds ?? req.query.shopId, req.query.workerIds ?? req.query.workerId, req.query.includeDeleted === "true");
   else scope=await personalAttendanceScope(pool,req,req.query.shopIds ?? req.query.shopId,req.query.workerIds ?? req.query.workerId);
   const range = z
     .object({ fromDate: z.iso.date(), toDate: z.iso.date() })
@@ -1466,7 +1467,7 @@ async function attendanceAdjustment(req, res) {
 }
 app.post(["/api/v1/attendance-adjustments", "/api/v1/manager/attendance-adjustments"], attendanceAdjustment);
 app.post("/api/v1/photos", upload.single("file"), async (req, res) => {
-  if (!["SHOP", "WORKER"].includes(req.account.role))
+  if (!["SHOP", "WORKER", ...backend].includes(req.account.role))
     fail(403, "App account required");
   if (process.env.PHOTO_STORAGE !== "local" && !process.env.PHOTO_BUCKET) fail(503, "Photo storage not configured");
   const operationId = uuid.parse(req.body.operationId);

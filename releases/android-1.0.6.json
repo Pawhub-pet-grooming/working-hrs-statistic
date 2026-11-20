@@ -1,0 +1,13 @@
+{
+  "versionName": "1.0.6",
+  "versionCode": 7,
+  "applicationId": "com.example.pawhub_signin_app",
+  "buildType": "release",
+  "minSdk": 26,
+  "sizeBytes": 6602449,
+  "sha256": "7de63c68a2fdd09d336e4b28b76616d3380e5b608365836c82b97053f4b5552e",
+  "builtAt": "2026-11-19T05:49:23.698450+00:00",
+  "publishedAt": "2026-11-19T05:50:12.590794+00:00",
+  "downloadUrl": "https://signin.pawhub.co.nz/api/v1/downloads/android/apk?sha256=7de63c68a2fdd09d336e4b28b76616d3380e5b608365836c82b97053f4b5552e",
+  "certificateSha256": "f739289d76a89520d973cc4675a8145167dbf90dd5f3fee5977a169884c98508"
+}

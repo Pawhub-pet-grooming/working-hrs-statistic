@@ -47,6 +47,10 @@ test(role + ': store selfie upload, attendance, retry and real record query stay
   const edit=await request('/attendance-adjustments',{operationId:randomUUID(),action:'UPDATE',recordId:signed.data.data.recordId,expectedVersion:1,type:'SIGN_IN',occurredAt:status.serverTime});
   assert.equal(edit.status,201,JSON.stringify(edit.data));assert.equal(edit.data.data.validationStatus,'PENDING');
   const changed=await request(`/attendance?shopId=0001&workerId=1234&fromDate=${status.localDate}&toDate=${status.localDate}`);assert.equal(changed.data.data.items[0].pending,true);
+  await pool.query("UPDATE accounts SET status='DISABLED' WHERE id=$1",[worker.id]);
+  assert.equal((await request('/shops/0001/employees/1234')).status,404);
+  assert.equal((await request('/attendance/status?shopId=0001&workerId=1234')).status,404);
+  assert.equal((await request('/attendance',{...body,operationId:randomUUID(),expectedDailyCount:1,type:'SIGN_OUT',plannedStartAt:undefined})).status,422);
  }finally{await new Promise(r=>server.close(r));}
 });
 

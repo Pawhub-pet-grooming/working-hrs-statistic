@@ -19,6 +19,7 @@ export default function WorkerPortal({ account, api, logout, session, onAccountS
   const managesStaff = ["MANAGER", "GENERAL_MANAGER", "SUPER_MANAGER"].includes(account.role);
   const attendanceEndpoint = managesStaff ? "/manager/staff-attendance" : "/attendance";
   const [staff, setStaff] = useState([]);
+  const [showDeleted, setShowDeleted] = useState(initialSelection?.staffOption?.status === "DISABLED");
   const [worker, setWorker] = useState(initialSelection?.workerIds || []);
   const t = (en, zh) => language === "zh" ? zh : en;
   const exportRequest = useRef(null);
@@ -44,7 +45,7 @@ export default function WorkerPortal({ account, api, logout, session, onAccountS
   useEffect(() => {
     let active = true;
     setError("");
-    Promise.all([api("/me/stores"), managesStaff ? api("/manager/staff-attendance/staff") : Promise.resolve([])]).then(([items, people]) => {
+    Promise.all([api("/me/stores"), managesStaff ? api("/manager/staff-attendance/staff?includeDeleted=true") : Promise.resolve([])]).then(([items, people]) => {
       if (!active) return;
       const reviewed=initialSelection?.staffOption;
       setStaff(reviewed&&!people.some(person=>person.id===reviewed.id)?[...people,reviewed]:people);
@@ -74,6 +75,7 @@ export default function WorkerPortal({ account, api, logout, session, onAccountS
     return () => { active = false; };
   }, [session, querySelection, refresh]);
 
+  const visibleStaff = staff.filter(person => person.status === "ACTIVE" || (showDeleted && person.status === "DISABLED"));
   function viewDailyRecords(day) {
     const selectedStaff=staff.find(person=>person.id===day.workerId)?.workerId || day.workerCode;
     const staffCodes=managesStaff?[selectedStaff]:[];
@@ -103,7 +105,7 @@ export default function WorkerPortal({ account, api, logout, session, onAccountS
     {notice && <div role="status" className="alert alert-success">{notice}</div>}
     <div className="card card-body mb-4">
       <div className="row g-3">
-        <div className="col-md-3">{managesStaff ? <MultiSelectFilter label={t("Staff", "员工")} options={staff.map(person=>({value:person.workerId,label:person.name+(person.workerId==='__self__'?` · ${t("Me","本人")}`:person.workerId.startsWith("__worker__")?"":` · ${person.workerId}`)}))} value={worker} allLabel={t("All accessible staff","全部可访问人员")} disabled={saving||exporting} onChange={codes=>{setWorker(codes);setQuerySelection(null);}}/> : <label className="form-label">{t("Staff","员工")}<input className="form-control mt-1" value={account.name} disabled readOnly/></label>}</div>
+        <div className="col-md-3">{managesStaff ? <MultiSelectFilter label={t("Staff", "员工")} options={visibleStaff.map(person=>({value:person.workerId,label:person.name+(person.status === "DISABLED" ? ` · ${t("Deleted","已删除")}` : "")+(person.workerId==='__self__'?` · ${t("Me","本人")}`:person.workerId.startsWith("__worker__")?"":` · ${person.workerId}`)}))} value={worker} allLabel={t("All accessible staff","全部可访问人员")} disabled={saving||exporting} onChange={codes=>{setWorker(codes);setQuerySelection(null);}}/> : <label className="form-label">{t("Staff","员工")}<input className="form-control mt-1" value={account.name} disabled readOnly/></label>}</div>
         <div className="col-md-3"><MultiSelectFilter label={t("Shop","门店")} options={shops.map(item=>({value:item.shopId,label:item.name}))} value={shop} allLabel={t("All shops","全部门店")} disabled={saving||exporting} onChange={codes=>{setShop(codes);setQuerySelection(null);}}/></div>
         <label className="col-md-3 form-label">{t("From", "开始日期")}
           <input className="form-control mt-1" type="date" value={fromDate} disabled={saving || exporting} onChange={(e) => { setFromDate(e.target.value); setQuerySelection(null); }} />
@@ -111,16 +113,17 @@ export default function WorkerPortal({ account, api, logout, session, onAccountS
         <label className="col-md-3 form-label">{t("To", "结束日期")}
           <input className="form-control mt-1" type="date" value={toDate} disabled={saving || exporting} onChange={(e) => { setToDate(e.target.value); setQuerySelection(null); }} />
         </label>
-        <div className="col-md-2 align-self-end mb-2"><button className="btn" disabled={loading || saving || exporting} onClick={() => {
+        {managesStaff && <div className="col-12"><label className="form-check"><input type="checkbox" className="form-check-input" checked={showDeleted} disabled={saving || exporting} onChange={event=>{setShowDeleted(event.target.checked);setWorker(current=>current.filter(code=>staff.some(p=>p.workerId===code && (p.status=== "ACTIVE" || (event.target.checked && p.status=== "DISABLED")))));setQuerySelection(null);}}/><span className="form-check-label">{t("Show deleted employees", "显示已删除员工")}</span></label></div>}
+        <div className="col-md-2 align-self-end mb-2"><button className="btn" disabled={loading || saving || exporting || (managesStaff && !visibleStaff.length)} onClick={() => {
           const start = DateTime.fromISO(fromDate, { zone }), end = DateTime.fromISO(toDate, { zone });
           if (!start.isValid || !end.isValid || start > end || end.diff(start, "days").days > 30) { setError(t("Select a valid date range of up to 31 days.", "请选择有效日期范围，最多 31 天。")); return; }
-          setQuerySelection({ shopIds:shop, ...(managesStaff ? {workerIds:worker} : {}), fromDate, toDate });
+          setQuerySelection({ shopIds:shop, ...(managesStaff ? {workerIds:worker.length ? worker : visibleStaff.map(p=>p.workerId)} : {}), fromDate, toDate });
         }}>{t("Search", "查询")}</button></div>
       </div>
     </div>
     {historyRecord && <AttendanceHistoryDialog record={historyRecord} api={api} language={language} onClose={() => setHistoryRecord(null)} />}
     {recordDialog && <AttendanceRecordDialog mode={recordDialog.mode} record={recordDialog.record}
-      shops={shops} workers={managesStaff ? staff : undefined} defaultWorker={recordDialog.record?.worker_code || (worker.length===1?worker[0]:"")} defaultShop={recordDialog.record?.shop_code || (shop.length===1?shop[0]:"")} api={api} endpoint={managesStaff ? "/manager/attendance-adjustments" : "/attendance-adjustments"}
+      shops={shops} workers={managesStaff ? staff.filter(p=>p.status === "ACTIVE") : undefined} defaultWorker={recordDialog.record?.worker_code || (worker.length===1?worker[0]:"")} defaultShop={recordDialog.record?.shop_code || (shop.length===1?shop[0]:"")} api={api} endpoint={managesStaff ? "/manager/attendance-adjustments" : "/attendance-adjustments"}
       onClose={() => setRecordDialog(null)} onDone={() => {
         setRecordDialog(null); setEditor(null); setRefresh((v) => v + 1);
         setNotice(managesStaff ? t("Attendance updated; change recorded in history.", "签到记录已更新，更改已记录在历史中。") : recordDialog.mode === "REMOVE" ? t("Removal requested. Pending approval.", "删除申请已提交，等待确认。") : t("Record added. Pending approval.", "记录已新增，等待确认。"));
