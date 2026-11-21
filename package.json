@@ -3,6 +3,7 @@
   "private": true,
   "workspaces": [
     "server",
+    "server-nest",
     "web"
   ],
   "scripts": {

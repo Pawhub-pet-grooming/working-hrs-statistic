@@ -1,0 +1,9 @@
+node_modules
+# Keep environment variables out of version control
+.env
+
+/generated/prisma
+/dist
+*.tsbuildinfo
+# Workspace member: root package-lock.json is the single source of truth
+package-lock.json

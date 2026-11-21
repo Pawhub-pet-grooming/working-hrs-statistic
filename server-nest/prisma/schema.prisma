@@ -1,0 +1,301 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model account_shops {
+  account_id String   @db.Uuid
+  shop_id    String   @db.Uuid
+  accounts   accounts @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  shops      shops    @relation(fields: [shop_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([account_id, shop_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model accounts {
+  id                                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role                                    String                   @unique(map: "unique_general_manager", where: raw("((role = 'GENERAL_MANAGER'::text) AND (status <> 'DISABLED'::text))"))
+  login_code                              String?                  @unique @db.VarChar(4)
+  email                                   String?
+  password_hash                           String?
+  status                                  String                   @default("PENDING")
+  name                                    String
+  created_at                              DateTime                 @default(now()) @db.Timestamptz(6)
+  preferred_shop_id                       String?                  @db.Uuid
+  first_name                              String                   @default("")
+  last_name                               String                   @default("")
+  profile_address                         String                   @default("")
+  profile_phone                           String                   @default("")
+  profile_version                         Int                      @default(1)
+  requires_manager_approval               Boolean                  @default(false)
+  approved_by_account_id                  String?                  @db.Uuid
+  approved_at                             DateTime?                @db.Timestamptz(6)
+  account_shops                           account_shops[]
+  accounts                                accounts?                @relation("accountsToaccounts", fields: [approved_by_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_accounts                          accounts[]               @relation("accountsToaccounts")
+  shops_accounts_preferred_shop_idToshops shops?                   @relation("accounts_preferred_shop_idToshops", fields: [preferred_shop_id], references: [id], onUpdate: NoAction)
+  api_operations                          api_operations[]
+  attendance_adjustments                  attendance_adjustments[]
+  attendance_export_jobs                  attendance_export_jobs[]
+  attendance_records                      attendance_records[]
+  attendance_validations                  attendance_validations[]
+  audit_logs                              audit_logs[]
+  email_jobs                              email_jobs?
+  manager_workers                         manager_workers[]
+  password_links                          password_links[]
+  photos                                  photos[]
+  report_exports                          report_exports[]
+  sessions                                sessions[]
+  shops_shops_account_idToaccounts        shops?                   @relation("shops_account_idToaccounts")
+  workers                                 workers?
+
+  @@index([preferred_shop_id], map: "accounts_preferred_shop", where: raw("(preferred_shop_id IS NOT NULL)"))
+}
+
+model api_operations {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actor_account_id String?   @db.Uuid
+  operation_id     String    @db.Uuid
+  request_hash     String
+  response_data    Json?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  accounts         accounts? @relation(fields: [actor_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([actor_account_id, operation_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model attendance_adjustments {
+  id                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  record_id              String                  @unique(map: "one_plan", where: raw("(source = 'PLANNED_START'::text)")) @db.Uuid
+  actor_account_id       String                  @db.Uuid
+  source                 String
+  action                 String
+  before_at              DateTime?               @db.Timestamptz(6)
+  after_at               DateTime?               @db.Timestamptz(6)
+  status                 String                  @default("PENDING")
+  base_version           Int
+  created_at             DateTime?               @default(now()) @db.Timestamptz(6)
+  before_type            String?
+  after_type             String?
+  accounts               accounts                @relation(fields: [actor_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attendance_records     attendance_records      @relation(fields: [record_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attendance_validations attendance_validations?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model attendance_export_jobs {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id       String    @db.Uuid
+  recipient_email  String
+  subject          String
+  snapshot_data    Json
+  status           String    @default("QUEUED")
+  attempt_count    Int       @default(0)
+  next_attempt_at  DateTime  @default(now()) @db.Timestamptz(6)
+  lease_expires_at DateTime? @db.Timestamptz(6)
+  last_error_code  String?
+  sent_at          DateTime? @db.Timestamptz(6)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+  accounts         accounts  @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model attendance_records {
+  id                                                                 String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  worker_id                                                          String                  @db.Uuid
+  shop_id                                                            String                  @db.Uuid
+  submitted_by_account_id                                            String                  @db.Uuid
+  sign_type                                                          String
+  source                                                             String
+  original_occurred_at                                               DateTime                @db.Timestamptz(6)
+  planned_start_at                                                   DateTime?               @db.Timestamptz(6)
+  effective_occurred_at                                              DateTime                @db.Timestamptz(6)
+  confirmed_occurred_at                                              DateTime?               @db.Timestamptz(6)
+  effective_deleted                                                  Boolean                 @default(false)
+  confirmed_deleted                                                  Boolean                 @default(false)
+  offline                                                            Boolean                 @default(false)
+  camera_status                                                      String
+  photo_id                                                           String?                 @unique @db.Uuid
+  location                                                           Json?
+  version                                                            Int                     @default(1)
+  received_at                                                        DateTime                @default(now()) @db.Timestamptz(6)
+  record_status                                                      String?                 @default(dbgenerated("\nCASE\n    WHEN effective_deleted THEN 'removal'::text\n    ELSE 'active'::text\nEND"))
+  original_sign_type                                                 String
+  manager_confirmed                                                  Boolean                 @default(false)
+  attendance_adjustments                                             attendance_adjustments?
+  photos                                                             photos?                 @relation(fields: [photo_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  shops                                                              shops                   @relation(fields: [shop_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  accounts                                                           accounts                @relation(fields: [submitted_by_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workers                                                            workers                 @relation(fields: [worker_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  work_segments_work_segments_sign_in_record_idToattendance_records  work_segments[]         @relation("work_segments_sign_in_record_idToattendance_records")
+  work_segments_work_segments_sign_out_record_idToattendance_records work_segments[]         @relation("work_segments_sign_out_record_idToattendance_records")
+
+  @@index([shop_id, worker_id, effective_occurred_at], map: "record_scope")
+}
+
+model attendance_validations {
+  id                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  adjustment_id           String                 @unique @db.Uuid
+  validated_by_account_id String                 @db.Uuid
+  decision                String
+  previous_confirmed_at   DateTime?              @db.Timestamptz(6)
+  resulting_confirmed_at  DateTime?              @db.Timestamptz(6)
+  validated_at            DateTime?              @default(now()) @db.Timestamptz(6)
+  attendance_adjustments  attendance_adjustments @relation(fields: [adjustment_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  accounts                accounts               @relation(fields: [validated_by_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model audit_logs {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actor_account_id String?   @db.Uuid
+  action           String
+  resource_id      String?   @db.Uuid
+  before_data      Json?
+  after_data       Json?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  accounts         accounts? @relation(fields: [actor_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model email_jobs {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id        String?         @unique(map: "one_registration_confirmation", where: raw("(kind = 'ACCOUNT_APPROVED'::text)")) @db.Uuid
+  password_link_id  String?         @db.Uuid
+  recipient_email   String
+  encrypted_payload String?
+  status            String?         @default("QUEUED")
+  attempt_count     Int?            @default(0)
+  next_attempt_at   DateTime?       @default(now()) @db.Timestamptz(6)
+  lease_expires_at  DateTime?       @db.Timestamptz(6)
+  last_error_code   String?
+  sent_at           DateTime?       @db.Timestamptz(6)
+  created_at        DateTime?       @default(now()) @db.Timestamptz(6)
+  kind              String          @default("PASSWORD_LINK")
+  accounts          accounts?       @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  password_links    password_links? @relation(fields: [password_link_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model manager_workers {
+  manager_account_id String   @db.Uuid
+  worker_id          String   @db.Uuid
+  accounts           accounts @relation(fields: [manager_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workers            workers  @relation(fields: [worker_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([manager_account_id, worker_id])
+  @@index([worker_id], map: "manager_workers_worker")
+}
+
+model migrations {
+  name       String    @id
+  applied_at DateTime? @default(now()) @db.Timestamptz(6)
+  checksum   String?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model organization_state {
+  id      Boolean @id @default(true)
+  version Int     @default(1)
+}
+
+model password_links {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id String       @db.Uuid
+  purpose    String
+  token_hash String       @unique
+  expires_at DateTime     @db.Timestamptz(6)
+  used_at    DateTime?    @db.Timestamptz(6)
+  revoked_at DateTime?    @db.Timestamptz(6)
+  created_at DateTime?    @default(now()) @db.Timestamptz(6)
+  email_jobs email_jobs[]
+  accounts   accounts     @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model photos {
+  id                     String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  uploaded_by_account_id String?             @db.Uuid
+  storage_key            String              @unique
+  status                 String
+  media_type             String?
+  byte_size              BigInt?
+  created_at             DateTime?           @default(now()) @db.Timestamptz(6)
+  deleted_at             DateTime?           @db.Timestamptz(6)
+  attendance_records     attendance_records?
+  accounts               accounts?           @relation(fields: [uploaded_by_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([created_at, id], map: "photos_retention_due", where: raw("(status = 'READY'::text)"))
+}
+
+model report_exports {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requested_by_account_id String    @db.Uuid
+  filters                 Json
+  snapshot_data           Json
+  created_at              DateTime? @default(now()) @db.Timestamptz(6)
+  accounts                accounts  @relation(fields: [requested_by_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model sessions {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id String    @db.Uuid
+  token_hash String    @unique
+  expires_at DateTime  @db.Timestamptz(6)
+  revoked_at DateTime? @db.Timestamptz(6)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  accounts   accounts  @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model shops {
+  id                                         String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id                                 String               @unique @db.Uuid
+  name                                       String
+  address                                    String
+  latitude                                   Decimal              @db.Decimal
+  longitude                                  Decimal              @db.Decimal
+  profile_version                            Int                  @default(1)
+  account_shops                              account_shops[]
+  accounts_accounts_preferred_shop_idToshops accounts[]           @relation("accounts_preferred_shop_idToshops")
+  attendance_records                         attendance_records[]
+  accounts_shops_account_idToaccounts        accounts             @relation("shops_account_idToaccounts", fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  work_segments                              work_segments[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model work_segments {
+  id                                                                      String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  worker_id                                                               String              @db.Uuid
+  shop_id                                                                 String              @db.Uuid
+  sign_in_record_id                                                       String?             @db.Uuid
+  sign_out_record_id                                                      String?             @db.Uuid
+  start_at                                                                DateTime?           @db.Timestamptz(6)
+  end_at                                                                  DateTime?           @db.Timestamptz(6)
+  duration_minutes                                                        Decimal?            @db.Decimal
+  hrs                                                                     Decimal?            @db.Decimal(6, 2)
+  status                                                                  String
+  issue_code                                                              String?
+  shops                                                                   shops               @relation(fields: [shop_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attendance_records_work_segments_sign_in_record_idToattendance_records  attendance_records? @relation("work_segments_sign_in_record_idToattendance_records", fields: [sign_in_record_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attendance_records_work_segments_sign_out_record_idToattendance_records attendance_records? @relation("work_segments_sign_out_record_idToattendance_records", fields: [sign_out_record_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workers                                                                 workers             @relation(fields: [worker_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model workers {
+  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id          String               @unique @db.Uuid
+  contact             String?
+  address             String?
+  timesheet_frequency String?
+  attendance_records  attendance_records[]
+  manager_workers     manager_workers[]
+  work_segments       work_segments[]
+  accounts            accounts             @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
