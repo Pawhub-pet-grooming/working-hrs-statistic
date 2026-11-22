@@ -1,4 +1,4 @@
-import { SHOP_LOGIN_PASSWORD, passwordMatches } from "./shop-password.js";
+import { SHOP_LOGIN_PASSWORD } from "./shop-password.js";
 import { mountAndroidDownload } from "./android-download.js";
 import { mountStoreDownload } from "./store-download.js";
 import { attendanceLocation } from "./attendance-location.js";
@@ -60,138 +60,20 @@ app.get("/api/v1/health", async (req, res) => {
   res.json({ data: { status: "ok" } });
 });
 mountAndroidDownload(app);
-app.post(
-  ["/api/v1/auth/login", "/api/v1/manager/auth/login"],
-  rateLimit({ windowMs: 900000, limit: 30 }),
-  async (req, res) => {
-    const b = z.object({
-      password: z.string().min(1), email: z.email().optional(),
-      accountId: z.string().regex(/^\d{4}$/).optional(),
-    }).refine((body) => !!body.email !== !!body.accountId).parse(req.body);
-    const manager = req.path.includes("/manager/");
-    const data = await transaction(async (c) => {
-    const r = await c.query(
-      manager
-        ? (b.email ? "SELECT * FROM accounts WHERE lower(email)=$1 AND role IN('MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE" : "SELECT * FROM accounts WHERE login_code=$1 AND role IN('MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE")
-        : b.email
-          ? "SELECT * FROM accounts WHERE lower(email)=$1 AND role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE"
-          : "SELECT * FROM accounts WHERE login_code=$1 AND role IN('SHOP','WORKER','MANAGER','GENERAL_MANAGER') FOR SHARE",
-      [b.email?.toLowerCase() || b.accountId],
-    );
-    const matches = [];
-    for (const account of r.rows) {
-      if ((account.status === "ACTIVE" || (!manager && account.role === "WORKER" && account.status === "PENDING" && account.requires_manager_approval)) && await passwordMatches(account, b.password))
-        matches.push(account);
-    }
-    if (!matches.length) fail(401, "Invalid credentials", "INVALID_CREDENTIALS");
-    if (matches.length > 1) fail(422, "Multiple accounts match. Use your four-digit employee ID or contact an administrator.", "AMBIGUOUS_ACCOUNT");
-    const a = matches[0];
-    const t = token();
-    const expiry = new Date(
-      Date.now() + Number(process.env.SESSION_HOURS || 12) * 3600000,
-    );
-    await c.query(
-      "INSERT INTO sessions(account_id,token_hash,expires_at) VALUES($1,$2,$3)",
-      [a.id, hash(t), expiry],
-    );
-    return { sessionToken: t, expiresAt: expiry, account: await accountInfo(a, c) };
-    });
-    res.json({ data });
-  },
-);
-app.post("/api/v1/auth/password-links/consume", async (req, res) => {
-  const b = z
-    .object({
-      token: z.string().min(20),
-      newPassword: z.string().min(6).max(128),
-    })
-    .parse(req.body);
-  const pw = await argon2.hash(b.newPassword);
-  const data = await transaction(async (c) => {
-    const r = await c.query(
-      "SELECT p.*,a.status,a.requires_manager_approval,a.approved_at FROM password_links p JOIN accounts a ON a.id=p.account_id WHERE token_hash=$1 FOR UPDATE OF p,a",
-      [hash(b.token)],
-    );
-    const p = r.rows[0];
-    if (
-      !p ||
-      p.used_at ||
-      p.revoked_at ||
-      new Date(p.expires_at) <= new Date() ||
-      p.status === "DISABLED" ||
-      (p.purpose === "FIRST_SETUP" && p.status !== "PENDING") ||
-      (p.purpose === "PASSWORD_RESET" && p.status !== "ACTIVE")
-    )
-      fail(422, "Link invalid or expired", "INVALID_LINK");
-    const awaitingManagerApproval = p.requires_manager_approval && !p.approved_at;
-    await c.query(
-      "UPDATE accounts SET password_hash=$1,status=$3 WHERE id=$2",
-      [pw, p.account_id, awaitingManagerApproval ? "PENDING" : "ACTIVE"],
-    );
-    await c.query("UPDATE password_links SET used_at=now() WHERE id=$1", [
-      p.id,
-    ]);
-    await c.query(
-      "UPDATE password_links SET revoked_at=now() WHERE account_id=$1 AND used_at IS NULL AND revoked_at IS NULL",
-      [p.account_id],
-    );
-    await c.query(
-      "UPDATE sessions SET revoked_at=now() WHERE account_id=$1 AND revoked_at IS NULL",
-      [p.account_id],
-    );
-    return { activated: !awaitingManagerApproval, awaitingManagerApproval };
-  });
-  res.json({ data });
-});
-app.post(
-  "/api/v1/auth/password-links",
-  rateLimit({ windowMs: 900000, limit: 10 }),
-  async (req, res) => {
-    const b = z
-      .object({
-        accountId: z
-          .string()
-          .regex(/^\d{4}$/)
-          .optional(),
-        email: z.email().optional(),
-      })
-      .refine((b) => !!b.accountId !== !!b.email)
-      .parse(req.body);
-    await transaction(async (c) => {
-      const matches = (await c.query(
-        b.accountId
-          ? "SELECT * FROM accounts WHERE login_code=$1 AND role IN('WORKER','MANAGER','GENERAL_MANAGER') AND status='ACTIVE' ORDER BY id FOR UPDATE"
-          : "SELECT * FROM accounts WHERE lower(email)=$1 AND role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER') AND status='ACTIVE' ORDER BY id FOR UPDATE",
-        [b.accountId || b.email.toLowerCase()],
-      )).rows;
-      for (const account of matches) await invite(c, account, "PASSWORD_RESET");
-    });
-    res.json({ data: { accepted: true } });
-  },
-);
-app.post("/api/v1/auth/register", rateLimit({ windowMs: 900000, limit: 10 }), async (req, res) => {
-  const email = z.email().max(254).transform(v => v.toLowerCase());
-  const b = z.object({ email, confirmEmail: email }).strict()
-    .refine(v => v.email === v.confirmEmail, "Email addresses must match").parse(req.body);
-  await transaction(async c => {
-    // Use the same code-allocation lock as administrator-created employee accounts.
-    await c.query("SELECT pg_advisory_xact_lock(820013)");
-    const matches = (await c.query("SELECT * FROM accounts WHERE lower(email)=$1 ORDER BY id FOR UPDATE", [b.email])).rows;
-    let account = matches.find(a => a.role === "WORKER");
-    if (matches.length && (!account || account.status !== "PENDING")) return;
-    if (!account) {
-      account = (await c.query("INSERT INTO accounts(role,email,name,requires_manager_approval) VALUES('WORKER',$1,$1,true) RETURNING *",
-        [b.email])).rows[0];
-      await c.query("INSERT INTO workers(account_id,contact,address) VALUES($1,'','')", [account.id]);
-      await audit(c, { id: account.id }, "SELF_REGISTRATION", account.id);
-    }
-    const recent = await c.query("SELECT 1 FROM password_links WHERE account_id=$1 AND purpose='FIRST_SETUP' AND used_at IS NULL AND revoked_at IS NULL AND expires_at>now()+interval '6 days 23 hours 55 minutes'", [account.id]);
-    if (!recent.rowCount) await invite(c, account);
-  });
-  // Do not expose whether this address already belongs to an account.
-  res.status(202).json({ data: { accepted: true } });
-});
+// auth/login, auth/register, auth/password-links(/consume) migrated to server-nest's
+// AuthController (Epic 2) — see server-nest/src/auth/auth.service.ts. They used to be
+// defined here, before this middleware, so a request never reached the auth check below;
+// now that they live in server-nest, this middleware must explicitly let them fall through
+// to it instead of rejecting them as unauthenticated.
+const publicAuthPaths = new Set([
+  "/auth/login",
+  "/manager/auth/login",
+  "/auth/register",
+  "/auth/password-links",
+  "/auth/password-links/consume",
+]);
 app.use("/api/v1", async (req, res, next) => {
+  if (publicAuthPaths.has(req.path)) return next();
   try {
     const t = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
     if (!t) fail(401, "Please sign in");
@@ -213,27 +95,7 @@ app.use(["/api/v1/attendance", "/api/v1/attendance-adjustments", "/api/v1/photos
       { status: 403, code: "MANAGER_APPROVAL_REQUIRED" }));
   next();
 });
-app.post("/api/v1/auth/logout", async (req, res) => {
-  await pool.query("UPDATE sessions SET revoked_at=now() WHERE token_hash=$1", [
-    req.sessionHash,
-  ]);
-  res.json({ data: { loggedOut: true } });
-});
-app.post("/api/v1/me/password", rateLimit({ windowMs: 900000, limit: 10 }), async (req, res) => {
-  if (req.account.role === "SHOP") fail(403, "Shop accounts use the fixed login password", "SHOP_FIXED_PASSWORD");
-  const body = z.object({ currentPassword: z.string().min(1).max(1024), newPassword: z.string().min(6).max(128) }).strict().parse(req.body);
-  await transaction(async (c) => {
-    const account = (await c.query("SELECT * FROM accounts WHERE id=$1 FOR UPDATE", [req.account.id])).rows[0];
-    if (!account.password_hash || !await argon2.verify(account.password_hash, body.currentPassword))
-      fail(422, "Current password is incorrect", "CURRENT_PASSWORD_INCORRECT");
-    if (body.currentPassword === body.newPassword) fail(422, "Choose a different password", "PASSWORD_UNCHANGED");
-    await c.query("UPDATE accounts SET password_hash=$1 WHERE id=$2", [await argon2.hash(body.newPassword), req.account.id]);
-    await c.query("UPDATE sessions SET revoked_at=now() WHERE account_id=$1 AND revoked_at IS NULL", [req.account.id]);
-    await c.query("UPDATE password_links SET revoked_at=now() WHERE account_id=$1 AND used_at IS NULL AND revoked_at IS NULL", [req.account.id]);
-    await audit(c, req.account, "PASSWORD_CHANGE", req.account.id);
-  });
-  res.json({ data: { changed: true, requiresLogin: true } });
-});
+// auth/logout, me/password migrated to server-nest's AuthController (Epic 2).
 async function accountInfo(account, c = pool) {
   const preferred = account.preferred_shop_id ? (await c.query(
     "SELECT sa.login_code FROM shops s JOIN accounts sa ON sa.id=s.account_id WHERE s.id=$1",
@@ -302,6 +164,9 @@ app.post("/api/v1/me/profile", async (req, res) => {
   res.json({ data });
 });
 function manager(req, res, next) {
+  // /manager/auth/login is public (migrated to server-nest) and never reaches here with
+  // req.account set — this prefix-mounted gate would otherwise match it too.
+  if (req.path === "/auth/login") return next();
   if (!backend.includes(req.account.role))
     return next(
       Object.assign(new Error("Manager access required"), { status: 403 }),

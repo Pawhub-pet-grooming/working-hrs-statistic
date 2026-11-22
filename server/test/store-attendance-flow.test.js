@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import argon2 from 'argon2';
 import sharp from 'sharp';
 import {pool} from '../src/db.js';
-import {app} from '../src/app.js';
+import {createCombinedTestServer} from '../../server-nest/dist/test-support/combined-app.js';
 
 after(() => pool.end());
 for (const role of ['WORKER', 'MANAGER']) {
@@ -23,7 +23,7 @@ test(role + ': store selfie upload, attendance, retry and real record query stay
  } else {
    await pool.query('INSERT INTO workers(account_id) VALUES($1)',[worker.id]);
  }
- const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+ const server=await createCombinedTestServer();server.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  const base=`http://127.0.0.1:${server.address().port}/api/v1`;
  let token;
  async function request(path,body){const response=await fetch(base+path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json'}:{}),...(token?{Authorization:`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:response.status,data:await response.json()};}

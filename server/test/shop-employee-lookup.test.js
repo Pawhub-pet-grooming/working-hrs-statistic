@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import argon2 from 'argon2';
 import { pool } from '../src/db.js';
-import { app } from '../src/app.js';
+import { createCombinedTestServer } from '../../server-nest/dist/test-support/combined-app.js';
 
 test('Shop employee lookup requires the owning shop and active approved workers and managers', {skip: !process.env.TEST_DATABASE_URL}, async () => {
   assert.ok(new URL(process.env.TEST_DATABASE_URL).pathname.endsWith('_test'));
@@ -12,7 +12,8 @@ test('Shop employee lookup requires the owning shop and active approved workers 
   await pool.query("INSERT INTO shops(account_id,name,address,latitude,longitude) VALUES($1,'Lookup shop','Test',0,0)", [shop.id]);
   const worker = (await pool.query("INSERT INTO accounts(role,login_code,name,email,password_hash,status,requires_manager_approval) VALUES('WORKER','1234','Real Employee','lookup-worker@test.invalid',$1,'ACTIVE',false) RETURNING id", [hash])).rows[0];
   await pool.query('INSERT INTO workers(account_id) VALUES($1)', [worker.id]);
-  const server = app.listen(0, '127.0.0.1');
+  const server = await createCombinedTestServer();
+  server.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}/api/v1`;
   async function get(path, token) {

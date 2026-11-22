@@ -7,10 +7,11 @@ import { DateTime } from "luxon";
 import { access } from "node:fs/promises";
 import { processPhotoRetention } from "../src/photo-retention.js";
 import { localPhotoPath } from "../src/photo-storage.js";
-import { app, apiLimiter } from "../src/app.js";
+import { apiLimiter } from "../src/app.js";
 import { pool } from "../src/db.js";
 import { processMail } from "../src/mail.js";
 import { processAttendanceExports } from "../src/attendance-export.js";
+import { createCombinedTestServer } from "../../server-nest/dist/test-support/combined-app.js";
 const enabled = !!process.env.TEST_DATABASE_URL;
 test(
   "PostgreSQL workflow: invitations, attendance, approval, scope, PDF and original preservation",
@@ -21,7 +22,8 @@ test(
       "Use a disposable database ending _test",
     );
     await pool.query("TRUNCATE accounts CASCADE");
-    const server = app.listen(0, "127.0.0.1");
+    const server = await createCombinedTestServer();
+    server.listen(0, "127.0.0.1");
     await new Promise((r) => server.once("listening", r));
     const base = `http://127.0.0.1:${server.address().port}/api/v1`;
     let ownerToken;

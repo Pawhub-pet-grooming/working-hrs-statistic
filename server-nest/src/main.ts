@@ -1,20 +1,8 @@
-import { StandardSchemaValidationPipe } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
-import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { AppModule } from './app.module.js';
-import { HttpErrorFilter } from './common/http-error.filter.js';
-import { mountLegacyApp } from './legacy-gateway.js';
+import { createApp } from './bootstrap-app.js';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
-
-  // Mounted first: Nest adds its own catch-all 404 during init, which would
-  // otherwise shadow the legacy app for every route Nest doesn't define.
-  await mountLegacyApp(app.getHttpAdapter().getInstance());
-
-  app.useGlobalPipes(new StandardSchemaValidationPipe());
-  app.useGlobalFilters(new HttpErrorFilter());
+  const app = await createApp();
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('PawHub API')

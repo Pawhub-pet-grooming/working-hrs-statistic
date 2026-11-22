@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "build": "npm run build -w web",
+    "pretest": "npm run build -w server-nest",
     "test": "npm test -w server",
     "dev:api": "npm run dev -w server",
     "dev:web": "npm run dev -w web"

@@ -4,12 +4,13 @@ import {randomUUID,createDecipheriv} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import argon2 from 'argon2';
 import {pool} from '../src/db.js';
-import {app} from '../src/app.js';
+import {createCombinedTestServer} from '../../server-nest/dist/test-support/combined-app.js';
 
 test('Owner invitations activate without a GM; other creators and self-registration still require approval', {skip:!process.env.TEST_DATABASE_URL}, async()=>{
   assert.ok(new URL(process.env.TEST_DATABASE_URL).pathname.endsWith('_test'));
   await pool.query('TRUNCATE accounts CASCADE');
-  const server=app.listen(0,'127.0.0.1');
+  const server=await createCombinedTestServer();
+  server.listen(0,'127.0.0.1');
   await new Promise(resolve=>server.once('listening',resolve));
   const base=`http://127.0.0.1:${server.address().port}/api/v1`;
   const password='owner-test-password';

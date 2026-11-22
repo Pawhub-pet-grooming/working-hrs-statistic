@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import argon2 from 'argon2';
 import sharp from 'sharp';
 import {pool} from '../src/db.js';
-import {app} from '../src/app.js';
+import {createCombinedTestServer} from '../../server-nest/dist/test-support/combined-app.js';
 after(()=>pool.end());
 
 for(const role of ['WORKER','MANAGER']) test(role+': personal app login, photo and attendance use the same flow', {skip:!process.env.TEST_DATABASE_URL},async()=>{
@@ -15,7 +15,7 @@ for(const role of ['WORKER','MANAGER']) test(role+': personal app login, photo a
  const shop=(await pool.query("INSERT INTO shops(account_id,name,address,latitude,longitude) VALUES($1,'Shop','Test',0,0) RETURNING id",[store.id])).rows[0];
  const person=(await pool.query("INSERT INTO accounts(role,login_code,name,email,password_hash,status,requires_manager_approval,preferred_shop_id) VALUES($1,'1000','Personal account','personal@test.invalid',$2,'ACTIVE',false,$3) RETURNING id",[role,hash,shop.id])).rows[0];
  await pool.query('INSERT INTO workers(account_id) VALUES($1)',[person.id]);
- const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+ const server=await createCombinedTestServer();server.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  const base=`http://127.0.0.1:${server.address().port}/api/v1`;let token;
  const request=async(path,body)=>{const r=await fetch(base+path,{method:body?'POST':'GET',headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,data:await r.json()};};
  try{

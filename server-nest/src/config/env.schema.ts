@@ -4,6 +4,9 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1),
+  // Mirrors server/src/db.js: when set (the legacy test suite's disposable `_test` database),
+  // it takes priority over DATABASE_URL so both apps run against the same database.
+  TEST_DATABASE_URL: z.string().optional(),
   WEB_ORIGIN: z.string().min(1).optional(),
   SESSION_HOURS: z.coerce.number().int().positive().default(12),
   AWS_REGION: z.string().optional(),
