@@ -5,10 +5,10 @@ import { DbService, type Queryable } from '../database/db.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { ScopeService } from '../organization/scope.service.js';
-import { ATTENDANCE_ZONE, localDate } from './attendance-domain.util.js';
+import { ATTENDANCE_ZONE, localDate, monthBounds, type MonthBounds } from './attendance-domain.util.js';
 import { dailyAttendanceHours, totalAttendanceHours, type AttendanceHoursRecord, type DailyHours } from './attendance-hours.util.js';
 import { attendanceLocation, type AttendanceLocationInput } from './attendance-location.util.js';
-import type { ClockDto, DateRangeDto } from './attendance.schemas.js';
+import type { ClockDto, DateRangeDto, ManagerAttendanceListQueryDto, ManagerAttendanceSummaryQueryDto } from './attendance.schemas.js';
 
 const SHOP_CODE_PATTERN = /^00\d{2}$/;
 const WORKER_CODE_PATTERN = /^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/;
@@ -131,6 +131,38 @@ interface LocationRow {
   shop_name: string;
   shop_latitude: string;
   shop_longitude: string;
+}
+
+interface StoreListRow {
+  id: string;
+  name: string;
+  shopId: string;
+}
+
+interface GroomerListRow {
+  id: string;
+  accountId: string;
+  name: string;
+  workerId: string;
+  status: string;
+}
+
+interface ManagerAttendanceRecordRow {
+  id: string;
+  worker_id: string;
+  shop_id: string;
+  workerId: string | null;
+  shopId: string | null;
+}
+
+interface ManagerSummaryGroupRow {
+  workerId: string | null;
+  worker_name: string;
+  shopId: string | null;
+  shop_name: string;
+  confirmedHrs: string;
+  pendingSegmentCount: number;
+  invalidSegmentCount: number;
 }
 
 interface LocationPosition {
@@ -349,6 +381,36 @@ export class AttendanceService {
     };
   }
 
+  /** Mirrors legacy's `GET /manager/attendance/stores`. */
+  async managerStores(account: Account): Promise<StoreListRow[]> {
+    return this.queryManagerStores(this.db, account.role, account.id);
+  }
+
+  /** Mirrors legacy's `GET /manager/attendance/groomers`. */
+  async managerGroomers(account: Account): Promise<GroomerListRow[]> {
+    return this.queryManagerGroomers(this.db, account.role, account.id);
+  }
+
+  /** Mirrors legacy's `GET /manager/attendance` (the paginated admin table — a separate scope scheme from `staffAttendanceScope`). */
+  async managerRecordsPage(account: Account, query: ManagerAttendanceListQueryDto): Promise<Record<string, unknown>> {
+    const period = monthBounds(query.month);
+    const all = await this.queryManagerRecords(this.db, account.role, account.id, period, query.shopId ?? null, query.workerId ?? null);
+
+    return {
+      items: all.slice(query.cursor, query.cursor + query.limit),
+      nextCursor: query.cursor + query.limit < all.length ? String(query.cursor + query.limit) : null,
+      period,
+    };
+  }
+
+  /** Mirrors legacy's `GET /manager/attendance/summary`. */
+  async managerSummary(account: Account, query: ManagerAttendanceSummaryQueryDto): Promise<Record<string, unknown>> {
+    const period = monthBounds(query.month);
+    const groups = await this.queryManagerSummary(this.db, account.role, account.id, period, query.shopId ?? null, query.workerId ?? null);
+
+    return { groups, period };
+  }
+
   /** Mirrors legacy's `staffAttendanceScope()` — the set of workers/shops a manager's staff view resolves to. */
   async staffAttendanceScope(
     c: Queryable,
@@ -513,6 +575,68 @@ export class AttendanceService {
       WHERE r.worker_id=ANY(${workerIds}::uuid[]) AND (${shopIds}::uuid[] IS NULL OR r.shop_id=ANY(${shopIds}::uuid[])) AND NOT r.confirmed_deleted
         AND (r.original_occurred_at AT TIME ZONE ${ATTENDANCE_ZONE})::date BETWEEN ${fromDate}::date AND ${toDate}::date
       ORDER BY r.original_occurred_at,r.id`;
+  }
+
+  private async queryManagerStores(c: Queryable, role: string, accountId: string): Promise<StoreListRow[]> {
+    return c.$queryRaw<StoreListRow[]>`
+      SELECT s.id,s.name,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id
+      WHERE ${role} IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.account_id=${accountId}::uuid AND ac.shop_id=s.id)
+         OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=${accountId}::uuid)
+      ORDER BY s.name`;
+  }
+
+  private async queryManagerGroomers(c: Queryable, role: string, accountId: string): Promise<GroomerListRow[]> {
+    return c.$queryRaw<GroomerListRow[]>`
+      SELECT w.id,a.id AS "accountId",a.name,a.login_code AS "workerId",a.status FROM workers w JOIN accounts a ON a.id=w.account_id
+      WHERE a.role='WORKER' AND a.status='ACTIVE' AND (${role} IN('SUPER_MANAGER','GENERAL_MANAGER')
+         OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=${accountId}::uuid AND mw.worker_id=w.id)
+         OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.account_id=${accountId}::uuid))
+      ORDER BY a.name`;
+  }
+
+  private async queryManagerRecords(
+    c: Queryable,
+    role: string,
+    accountId: string,
+    period: MonthBounds,
+    shopCode: string | null,
+    workerCode: string | null,
+  ): Promise<ManagerAttendanceRecordRow[]> {
+    return c.$queryRaw<ManagerAttendanceRecordRow[]>`
+      SELECT r.*,(SELECT x.after_type FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING' LIMIT 1) AS pending_sign_type,
+        wa.name AS worker_name,wa.login_code AS "workerId",s.name AS shop_name,sa.login_code AS "shopId",
+        EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING') AS pending
+      FROM attendance_records r JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id JOIN accounts sa ON sa.id=s.account_id
+      WHERE (${role} IN('SUPER_MANAGER','GENERAL_MANAGER') OR w.account_id=${accountId}::uuid
+         OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=${accountId}::uuid)
+         OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.worker_id=w.id AND mw.manager_account_id=${accountId}::uuid))
+        AND r.effective_occurred_at >= ${period.start}::timestamptz AND r.effective_occurred_at < ${period.end}::timestamptz
+        AND (${shopCode}::text IS NULL OR sa.login_code=${shopCode}) AND (${workerCode}::text IS NULL OR wa.login_code=${workerCode})
+        AND (${role}='SUPER_MANAGER' OR NOT r.effective_deleted)
+      ORDER BY r.effective_occurred_at,r.id`;
+  }
+
+  private async queryManagerSummary(
+    c: Queryable,
+    role: string,
+    accountId: string,
+    period: MonthBounds,
+    shopCode: string | null,
+    workerCode: string | null,
+  ): Promise<ManagerSummaryGroupRow[]> {
+    return c.$queryRaw<ManagerSummaryGroupRow[]>`
+      SELECT wa.login_code AS "workerId",wa.name AS worker_name,sa.login_code AS "shopId",s.name AS shop_name,
+        COALESCE(sum(g.hrs) FILTER(WHERE g.status='CONFIRMED'),0)::numeric(12,2)::text AS "confirmedHrs",
+        count(*) FILTER(WHERE g.status='PENDING')::int AS "pendingSegmentCount",
+        count(*) FILTER(WHERE g.status='INVALID')::int AS "invalidSegmentCount"
+      FROM work_segments g JOIN workers w ON w.id=g.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=g.shop_id JOIN accounts sa ON sa.id=s.account_id
+      LEFT JOIN attendance_records rr ON rr.id=COALESCE(g.sign_in_record_id,g.sign_out_record_id)
+      WHERE (${role} IN('SUPER_MANAGER','GENERAL_MANAGER') OR w.account_id=${accountId}::uuid
+         OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=${accountId}::uuid)
+         OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.worker_id=w.id AND mw.manager_account_id=${accountId}::uuid))
+        AND COALESCE(g.start_at,rr.effective_occurred_at)>=${period.start}::timestamptz AND COALESCE(g.start_at,rr.effective_occurred_at)<${period.end}::timestamptz
+        AND (${shopCode}::text IS NULL OR sa.login_code=${shopCode}) AND (${workerCode}::text IS NULL OR wa.login_code=${workerCode})
+      GROUP BY wa.login_code,wa.name,sa.login_code,s.name ORDER BY wa.name`;
   }
 
   private async checkDailyCountExpectation(

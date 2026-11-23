@@ -40,3 +40,19 @@ export type StaffListingQueryDto = z.infer<typeof staffListingQuerySchema>;
 
 export const locationsCursorQuerySchema = z.object({ cursor: z.coerce.number().int().min(0).default(0) });
 export type LocationsCursorQueryDto = z.infer<typeof locationsCursorQuerySchema>;
+
+export const managerAttendanceListQuerySchema = z.object({
+  month: z.string(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.coerce.number().int().min(0).default(0),
+  shopId: z.string().optional(),
+  workerId: z.string().optional(),
+});
+export type ManagerAttendanceListQueryDto = z.infer<typeof managerAttendanceListQuerySchema>;
+
+export const managerAttendanceSummaryQuerySchema = z.object({
+  month: z.string(),
+  shopId: z.string().optional(),
+  workerId: z.string().optional(),
+});
+export type ManagerAttendanceSummaryQueryDto = z.infer<typeof managerAttendanceSummaryQuerySchema>;

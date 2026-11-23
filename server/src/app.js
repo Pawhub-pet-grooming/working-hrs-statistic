@@ -180,14 +180,8 @@ const scopeSql =
 // shops listing (/shops, /manager/shops), shop creation (POST /manager/shops) and shop profile
 // edit (POST /manager/shops/:id/profile, in organization.js) migrated to server-nest's
 // ShopsController/ManagerShopsController (Epic 3).
-app.get("/api/v1/manager/attendance/stores", async (req, res) => {
-  const result = await pool.query(`SELECT s.id,s.name,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id WHERE $1 IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.account_id=$2 AND ac.shop_id=s.id) OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2) ORDER BY s.name`, [req.account.role, req.account.id]);
-  res.json({ data: result.rows });
-});
-app.get("/api/v1/manager/attendance/groomers", async (req, res) => {
-  const result = await pool.query(`SELECT w.id,a.id AS "accountId",a.name,a.login_code AS "workerId",a.status FROM workers w JOIN accounts a ON a.id=w.account_id WHERE a.role='WORKER' AND a.status='ACTIVE' AND ($1 IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2 AND mw.worker_id=w.id) OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.account_id=$2)) ORDER BY a.name`, [req.account.role, req.account.id]);
-  res.json({ data: result.rows });
-});
+// GET /manager/attendance/stores and /groomers migrated to server-nest's
+// ManagerAttendanceController (Epic 3).
 // workers/managers directory, account creation, managed-account profile/remove/approve/
 // invitations, invitations listing, and org-wide permissions/general-manager/role routes
 // (organization.js) migrated to server-nest's ManagerAccountsController/OrganizationController
@@ -295,29 +289,9 @@ async function summary(req, c = pool) {
     )
   ).rows;
 }
-app.get("/api/v1/manager/attendance", async (req, res) => {
-  const all = await records(req);
-  const limit = z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(50)
-      .parse(req.query.limit),
-    offset = z.coerce.number().int().min(0).default(0).parse(req.query.cursor);
-  res.json({
-    data: {
-      items: all.slice(offset, offset + limit),
-      nextCursor: offset + limit < all.length ? String(offset + limit) : null,
-      period: monthBounds(req.query.month),
-    },
-  });
-});
-app.get("/api/v1/manager/attendance/summary", async (req, res) =>
-  res.json({
-    data: { groups: await summary(req), period: monthBounds(req.query.month) },
-  }),
-);
+// GET /manager/attendance (paginated) and /summary migrated to server-nest's
+// ManagerAttendanceController (Epic 3). records()/summary()/filters()/recordScopeSql stay —
+// POST /manager/reports/pdf (ReportsModule, not yet migrated) still calls them.
 app.get(
   ["/api/v1/manager/attendance/:id/history", "/api/v1/attendance/:id/history"],
   async (req, res) => {
