@@ -9,10 +9,12 @@ describe('ScopeService', () => {
   const shopsCount = vi.fn();
   const accountShopsCount = vi.fn();
   const managerWorkersCount = vi.fn();
+  const workersCount = vi.fn();
   const c = {
     shops: { count: shopsCount },
     account_shops: { count: accountShopsCount },
     manager_workers: { count: managerWorkersCount },
+    workers: { count: workersCount },
   } as unknown as DbService;
 
   const account = (role: Account['role']): Account => ({ id: 'account-1', role }) as Account;
@@ -21,6 +23,7 @@ describe('ScopeService', () => {
     shopsCount.mockReset();
     accountShopsCount.mockReset();
     managerWorkersCount.mockReset();
+    workersCount.mockReset();
 
     const module: TestingModule = await Test.createTestingModule({ providers: [ScopeService] }).compile();
     service = module.get(ScopeService);
@@ -80,5 +83,40 @@ describe('ScopeService', () => {
   it('assertWorker resolves when the manager manages that worker', async () => {
     managerWorkersCount.mockResolvedValue(1);
     await expect(service.assertWorker(c, account('MANAGER'), 'worker-1')).resolves.toBeUndefined();
+  });
+
+  it('assertRecordScope resolves for a backend account editing its own worker row, without a shop/manager lookup', async () => {
+    workersCount.mockResolvedValue(1);
+    await expect(service.assertRecordScope(c, account('MANAGER'), 'shop-1', 'worker-1')).resolves.toBeUndefined();
+    expect(workersCount).toHaveBeenCalledWith({ where: { id: 'worker-1', account_id: 'account-1' } });
+    expect(accountShopsCount).not.toHaveBeenCalled();
+    expect(managerWorkersCount).not.toHaveBeenCalled();
+  });
+
+  it('assertRecordScope falls back to allowed() when the account does not own that worker row', async () => {
+    workersCount.mockResolvedValue(0);
+    accountShopsCount.mockResolvedValue(1);
+    await expect(service.assertRecordScope(c, account('MANAGER'), 'shop-1', 'worker-1')).resolves.toBeUndefined();
+  });
+
+  it('assertRecordScope falls back to assertWorker() when neither self-ownership nor shop scope match', async () => {
+    workersCount.mockResolvedValue(0);
+    accountShopsCount.mockResolvedValue(0);
+    managerWorkersCount.mockResolvedValue(1);
+    await expect(service.assertRecordScope(c, account('MANAGER'), 'shop-1', 'worker-1')).resolves.toBeUndefined();
+  });
+
+  it('assertRecordScope throws WORKER_FORBIDDEN when none of the three checks pass', async () => {
+    workersCount.mockResolvedValue(0);
+    accountShopsCount.mockResolvedValue(0);
+    managerWorkersCount.mockResolvedValue(0);
+    const promise = service.assertRecordScope(c, account('MANAGER'), 'shop-1', 'worker-1');
+    await expect(promise).rejects.toMatchObject({ response: { error: { code: 'WORKER_FORBIDDEN' } } });
+  });
+
+  it('assertRecordScope skips the self-worker check entirely for non-backend roles', async () => {
+    shopsCount.mockResolvedValue(1);
+    await expect(service.assertRecordScope(c, account('SHOP'), 'shop-1', 'worker-1')).resolves.toBeUndefined();
+    expect(workersCount).not.toHaveBeenCalled();
   });
 });

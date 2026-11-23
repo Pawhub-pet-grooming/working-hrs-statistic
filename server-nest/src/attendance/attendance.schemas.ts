@@ -56,3 +56,32 @@ export const managerAttendanceSummaryQuerySchema = z.object({
   workerId: z.string().optional(),
 });
 export type ManagerAttendanceSummaryQueryDto = z.infer<typeof managerAttendanceSummaryQuerySchema>;
+
+export const recordIdParamSchema = uuid;
+
+export const adjustmentSchema = z.object({
+  operationId: uuid,
+  action: z.enum(['ADD', 'UPDATE', 'DELETE']),
+  recordId: uuid.optional(),
+  expectedVersion: z.number().int().positive().optional(),
+  occurredAt: instant.optional(),
+  workerId: z.string().optional(),
+  shopId: z.string().optional(),
+  type: z.enum(['SIGN_IN', 'SIGN_OUT']).optional(),
+});
+export type AdjustmentDto = z.infer<typeof adjustmentSchema>;
+
+export const correctionSchema = z.object({
+  operationId: uuid,
+  expectedRecordVersion: z.number().int().positive(),
+  occurredAt: instant,
+  type: z.enum(['SIGN_IN', 'SIGN_OUT']).optional(),
+});
+export type CorrectionDto = z.infer<typeof correctionSchema>;
+
+export const decisionSchema = z.object({
+  operationId: uuid,
+  decision: z.enum(['APPROVE', 'REJECT']),
+  expectedRecordVersion: z.number().int().positive(),
+});
+export type DecisionDto = z.infer<typeof decisionSchema>;

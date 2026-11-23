@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { AuditService } from '../audit/audit.service.js';
 import { BACKEND_ROLES, PERSONAL_ROLES, type Account, type Role } from '../auth/types.js';
 import { apiError } from '../common/api-error.js';
 import { DbService, type Queryable } from '../database/db.service.js';
@@ -8,7 +9,15 @@ import { ScopeService } from '../organization/scope.service.js';
 import { ATTENDANCE_ZONE, localDate, monthBounds, type MonthBounds } from './attendance-domain.util.js';
 import { dailyAttendanceHours, totalAttendanceHours, type AttendanceHoursRecord, type DailyHours } from './attendance-hours.util.js';
 import { attendanceLocation, type AttendanceLocationInput } from './attendance-location.util.js';
-import type { ClockDto, DateRangeDto, ManagerAttendanceListQueryDto, ManagerAttendanceSummaryQueryDto } from './attendance.schemas.js';
+import type {
+  AdjustmentDto,
+  ClockDto,
+  CorrectionDto,
+  DateRangeDto,
+  DecisionDto,
+  ManagerAttendanceListQueryDto,
+  ManagerAttendanceSummaryQueryDto,
+} from './attendance.schemas.js';
 
 const SHOP_CODE_PATTERN = /^00\d{2}$/;
 const WORKER_CODE_PATTERN = /^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/;
@@ -165,6 +174,63 @@ interface ManagerSummaryGroupRow {
   invalidSegmentCount: number;
 }
 
+interface AdjustmentRecordRow {
+  id: string;
+  worker_id: string;
+  shop_id: string;
+  sign_type: string;
+  version: number;
+  confirmed_occurred_at: Date | null;
+  confirmed_deleted: boolean;
+  manager_confirmed: boolean;
+  effective_occurred_at: Date;
+}
+
+interface AdjustmentWorkerLoadRow extends AdjustmentRecordRow {
+  worker_code: string | null;
+  shop_code: string | null;
+}
+
+interface PendingAdjustmentRow {
+  id: string;
+  after_type: string | null;
+}
+
+interface AdjustmentIdRow {
+  id: string;
+}
+
+interface AdjustmentWorkerLookupRow {
+  id: string;
+}
+
+interface WorkerAccountIdRow {
+  account_id: string;
+}
+
+interface AdjustmentHistoryRow {
+  id: string;
+  record_id: string;
+  decision: string | null;
+  validated_at: Date | null;
+  validator: string | null;
+}
+
+interface AdjustmentQueueRow {
+  id: string;
+  item_type: string;
+}
+
+interface IssueQueueRow {
+  id: string;
+  item_type: string;
+}
+
+interface PersonApprovalRow {
+  account_id: string;
+  item_type: string;
+}
+
 interface LocationPosition {
   status: string;
   latitude?: number;
@@ -183,6 +249,7 @@ export class AttendanceService {
     private readonly db: DbService,
     private readonly idempotency: IdempotencyService,
     private readonly scope: ScopeService,
+    private readonly audit: AuditService,
   ) {}
 
   async clockInOrOut(account: Account, dto: ClockDto): Promise<Record<string, unknown>> {
@@ -409,6 +476,449 @@ export class AttendanceService {
     const groups = await this.queryManagerSummary(this.db, account.role, account.id, period, query.shopId ?? null, query.workerId ?? null);
 
     return { groups, period };
+  }
+
+  /** Mirrors legacy's `GET [/manager/attendance/:id/history, /attendance/:id/history]`. */
+  async getHistory(account: Account, recordId: string): Promise<Record<string, unknown>> {
+    const record = await this.queryFullRecordById(this.db, recordId);
+    if (!record) throw apiError(404, 'Record not found');
+
+    if (account.role === 'WORKER') {
+      const owner = await this.queryWorkerAccountId(this.db, record.worker_id);
+      if (owner?.account_id !== account.id) throw apiError(403, 'Only your own history');
+    } else {
+      await this.scope.assertRecordScope(this.db, account, record.shop_id, record.worker_id);
+    }
+
+    const history = await this.queryAdjustmentHistory(this.db, record.id);
+
+    return { record, history };
+  }
+
+  /** Mirrors legacy's `GET /manager/validations`. */
+  async listValidations(account: Account, query: ManagerAttendanceSummaryQueryDto): Promise<unknown[]> {
+    const period = monthBounds(query.month);
+    const shopCode = query.shopId ?? null;
+    const workerCode = query.workerId ?? null;
+
+    const adjustments = await this.queryPendingAdjustments(this.db, account.role, account.id, period, shopCode, workerCode);
+    const issues = await this.queryInvalidIssues(this.db, account.role, account.id, period, shopCode, workerCode);
+    const people = account.role === 'GENERAL_MANAGER' ? await this.queryPendingPeople(this.db) : [];
+
+    return [...people, ...adjustments, ...issues];
+  }
+
+  /** Mirrors legacy's `POST /manager/validations/:id/decision`. */
+  async decideValidation(account: Account, adjustmentId: string, dto: DecisionDto): Promise<Record<string, unknown>> {
+    return this.db.$transaction((tx) =>
+      this.idempotency.run(tx, account.id, dto.operationId, 'VALIDATION', { ...dto, adjustmentId }, async () => {
+        const reference = await this.queryAdjustmentRecordId(tx, adjustmentId);
+        if (!reference) throw apiError(404, 'Adjustment missing');
+
+        const record = await this.lockFullRecordById(tx, reference.record_id);
+        const adjustment = await this.lockAdjustmentById(tx, adjustmentId);
+        if (!record || !adjustment) throw apiError(404, 'Adjustment missing');
+
+        await this.scope.assertRecordScope(tx, account, record.shop_id, record.worker_id);
+
+        if (record.version !== dto.expectedRecordVersion || adjustment.status !== 'PENDING') {
+          throw apiError(409, 'Record changed; reload', 'VERSION_CONFLICT');
+        }
+        if (await this.hasOtherPendingAdjustment(tx, record.id, adjustment.id)) throw apiError(409, 'Multiple adjustments require manual resolution');
+
+        const approved = dto.decision === 'APPROVE';
+        const resultingAt = approved ? adjustment.after_at : record.confirmed_occurred_at;
+        const deleted = approved ? adjustment.action === 'DELETE' : record.confirmed_deleted;
+        const type = approved ? adjustment.after_type || record.sign_type : record.sign_type;
+
+        await this.updateAdjustmentStatus(tx, adjustment.id, approved ? 'APPROVED' : 'REJECTED');
+        await this.insertValidation(tx, adjustment.id, account.id, dto.decision, record.confirmed_occurred_at, resultingAt);
+        await this.updateRecordForDecision(tx, record.id, resultingAt, deleted, type, approved);
+        await this.rebuildWorkSegments(tx, record.worker_id);
+        await this.audit.record(tx, account.id, 'VALIDATION_' + dto.decision, record.id);
+
+        return { recordId: record.id, version: record.version + 1 };
+      }),
+    );
+  }
+
+  /** Mirrors legacy's `POST /manager/attendance/:id/corrections` — a manager-only direct edit via the adjustment pipeline. */
+  async submitCorrection(account: Account, recordId: string, dto: CorrectionDto): Promise<Record<string, unknown>> {
+    return this.submitAdjustment(account, true, {
+      operationId: dto.operationId,
+      action: 'UPDATE',
+      recordId,
+      expectedVersion: dto.expectedRecordVersion,
+      occurredAt: dto.occurredAt,
+      type: dto.type,
+    });
+  }
+
+  /** Mirrors legacy's `attendanceAdjustment()`, shared by the adjustments endpoints and corrections. */
+  async submitAdjustment(account: Account, managerEndpoint: boolean, dto: AdjustmentDto): Promise<Record<string, unknown>> {
+    const managerRequest = BACKEND_ROLES.includes(account.role as Role);
+
+    return this.db.$transaction((tx) =>
+      this.idempotency.run(tx, account.id, dto.operationId, 'ADJUSTMENT', dto, async () => {
+        const record: AdjustmentRecordRow =
+          dto.action === 'ADD'
+            ? await this.createAdjustmentRecord(tx, account, managerEndpoint, dto)
+            : await this.loadAdjustmentRecord(tx, account, managerEndpoint, managerRequest, dto);
+
+        const pending = await this.lockPendingAdjustments(tx, record.id);
+        if (!managerRequest && pending.length > 1) throw apiError(409, 'Multiple pending changes require manager resolution');
+
+        if (managerRequest) return this.applyManagerAdjustment(tx, account, record, pending, dto);
+
+        return this.queueWorkerAdjustment(tx, account, record, pending, dto);
+      }),
+    );
+  }
+
+  private async createAdjustmentRecord(
+    tx: Prisma.TransactionClient,
+    account: Account,
+    managerEndpoint: boolean,
+    dto: AdjustmentDto,
+  ): Promise<AdjustmentRecordRow> {
+    if (!dto.occurredAt || !dto.type) throw apiError(422, 'Time and type required');
+
+    let workerId: string;
+    let shopId: string;
+
+    if (managerEndpoint) {
+      const worker = await this.queryAdjustmentWorkerByCode(tx, dto.workerId ?? null, account.id);
+      const shop = dto.shopId ? await this.shopByCode(tx, dto.shopId) : undefined;
+      if (!worker || !shop) throw apiError(422, 'Active employee and store required');
+      await this.scope.assertRecordScope(tx, account, shop.id, worker.id);
+      workerId = worker.id;
+      shopId = shop.id;
+    } else {
+      const { worker, shop } = await this.resolveAppScope(tx, account, dto.shopId, dto.workerId || account.login_code);
+      workerId = worker.id;
+      shopId = shop!.id;
+    }
+
+    await this.lockWorkerForRebuild(tx, workerId);
+
+    return this.insertManualAdjustmentRecord(tx, workerId, shopId, account.id, dto.type, dto.occurredAt);
+  }
+
+  private async loadAdjustmentRecord(
+    tx: Prisma.TransactionClient,
+    account: Account,
+    managerEndpoint: boolean,
+    managerRequest: boolean,
+    dto: AdjustmentDto,
+  ): Promise<AdjustmentWorkerLoadRow> {
+    if (!dto.recordId || !dto.expectedVersion) throw apiError(422, 'Record and version required');
+
+    const record = await this.lockAdjustmentRecordById(tx, dto.recordId);
+    if (!record) throw apiError(404, 'Record missing');
+
+    if (managerEndpoint) {
+      await this.scope.assertRecordScope(tx, account, record.shop_id, record.worker_id);
+    } else {
+      const owner = await this.queryWorkerAccountId(tx, record.worker_id);
+      if (account.role !== 'SHOP' && owner?.account_id !== account.id) throw apiError(403, 'Only your own records');
+      await this.resolveAppScope(tx, account, record.shop_code, record.worker_code);
+    }
+
+    if (!managerRequest && record.manager_confirmed) throw apiError(403, 'Confirmed records can only be changed by a manager', 'RECORD_CONFIRMED');
+    if (record.confirmed_deleted) throw apiError(409, 'Record is already marked for removal');
+    if (record.version !== dto.expectedVersion) throw apiError(409, 'Record changed');
+    if (dto.action === 'UPDATE' && !dto.occurredAt) throw apiError(422, 'Time required');
+
+    return record;
+  }
+
+  private async applyManagerAdjustment(
+    tx: Prisma.TransactionClient,
+    account: Account,
+    record: AdjustmentRecordRow,
+    pending: PendingAdjustmentRow[],
+    dto: AdjustmentDto,
+  ): Promise<Record<string, unknown>> {
+    for (const old of pending) {
+      await this.updateAdjustmentStatus(tx, old.id, 'REJECTED');
+      await this.insertValidation(tx, old.id, account.id, 'REJECT', record.confirmed_occurred_at, record.confirmed_occurred_at);
+      await this.audit.record(tx, account.id, 'ATTENDANCE_REQUEST_SUPERSEDED', record.id, { adjustmentId: old.id }, { reason: 'Direct manager change' });
+    }
+
+    const deleting = dto.action === 'DELETE';
+    const type = dto.type || record.sign_type;
+    const after = deleting ? null : dto.occurredAt ?? null;
+
+    const adjustment = await this.insertManagerAdjustment(tx, record, account.id, dto.action, after, deleting ? null : type);
+    await this.insertValidation(tx, adjustment.id, account.id, 'APPROVE', record.confirmed_occurred_at, after);
+    await this.updateRecordForManagerEdit(tx, record.id, type, after, deleting);
+    await this.rebuildWorkSegments(tx, record.worker_id);
+    await this.audit.record(
+      tx,
+      account.id,
+      `ATTENDANCE_MANAGER_${dto.action}`,
+      record.id,
+      { time: record.effective_occurred_at, type: record.sign_type },
+      { time: after, type: deleting ? null : type },
+    );
+
+    return {
+      recordId: record.id,
+      adjustmentId: adjustment.id,
+      recordStatus: deleting ? 'removal' : 'active',
+      validationStatus: 'APPROVED',
+      version: record.version + 1,
+    };
+  }
+
+  private async queueWorkerAdjustment(
+    tx: Prisma.TransactionClient,
+    account: Account,
+    record: AdjustmentRecordRow,
+    pending: PendingAdjustmentRow[],
+    dto: AdjustmentDto,
+  ): Promise<Record<string, unknown>> {
+    const after = dto.action === 'DELETE' ? null : dto.occurredAt ?? null;
+    const finalType = dto.type || pending[0]?.after_type || record.sign_type;
+
+    const adjustment = pending.length
+      ? await this.updatePendingAdjustment(tx, pending[0]!.id, account.id, dto.action, after, dto.action === 'DELETE' ? null : finalType, record.version)
+      : await this.insertWorkerAdjustment(tx, record, account.id, dto.action, after, dto.action === 'DELETE' ? null : finalType);
+
+    await this.updateRecordForPendingEdit(tx, record.id, after, dto.action === 'DELETE');
+    await this.rebuildWorkSegments(tx, record.worker_id);
+    await this.audit.record(tx, account.id, `ATTENDANCE_${dto.action === 'DELETE' ? 'REMOVAL' : dto.action}_REQUEST`, record.id);
+
+    return {
+      recordId: record.id,
+      recordStatus: dto.action === 'DELETE' ? 'removal' : 'active',
+      adjustmentId: adjustment.id,
+      validationStatus: 'PENDING',
+    };
+  }
+
+  private async queryFullRecordById(c: Queryable, id: string): Promise<AdjustmentRecordRow | undefined> {
+    const [record] = await c.$queryRaw<AdjustmentRecordRow[]>`SELECT * FROM attendance_records WHERE id=${id}::uuid`;
+    return record;
+  }
+
+  private async lockFullRecordById(tx: Prisma.TransactionClient, id: string): Promise<AdjustmentRecordRow | undefined> {
+    const [record] = await tx.$queryRaw<AdjustmentRecordRow[]>`SELECT * FROM attendance_records WHERE id=${id}::uuid FOR UPDATE`;
+    return record;
+  }
+
+  private async queryWorkerAccountId(c: Queryable, workerId: string): Promise<WorkerAccountIdRow | undefined> {
+    const [row] = await c.$queryRaw<WorkerAccountIdRow[]>`SELECT account_id FROM workers WHERE id=${workerId}::uuid`;
+    return row;
+  }
+
+  private async queryAdjustmentHistory(c: Queryable, recordId: string): Promise<AdjustmentHistoryRow[]> {
+    return c.$queryRaw<AdjustmentHistoryRow[]>`
+      SELECT a.*,v.decision,v.validated_at,u.name AS validator FROM attendance_adjustments a
+      LEFT JOIN attendance_validations v ON v.adjustment_id=a.id LEFT JOIN accounts u ON u.id=v.validated_by_account_id
+      WHERE a.record_id=${recordId}::uuid ORDER BY a.created_at`;
+  }
+
+  private async queryAdjustmentRecordId(c: Queryable, adjustmentId: string): Promise<{ record_id: string } | undefined> {
+    const [row] = await c.$queryRaw<{ record_id: string }[]>`SELECT record_id FROM attendance_adjustments WHERE id=${adjustmentId}::uuid`;
+    return row;
+  }
+
+  private async lockAdjustmentById(
+    tx: Prisma.TransactionClient,
+    adjustmentId: string,
+  ): Promise<{ id: string; status: string; action: string; after_at: Date | null; after_type: string | null } | undefined> {
+    const [row] = await tx.$queryRaw<{ id: string; status: string; action: string; after_at: Date | null; after_type: string | null }[]>`
+      SELECT * FROM attendance_adjustments WHERE id=${adjustmentId}::uuid FOR UPDATE`;
+    return row;
+  }
+
+  private async hasOtherPendingAdjustment(tx: Prisma.TransactionClient, recordId: string, excludeAdjustmentId: string): Promise<boolean> {
+    const rows = await tx.$queryRaw<{ exists: true }[]>`
+      SELECT 1 AS exists FROM attendance_adjustments WHERE record_id=${recordId}::uuid AND status='PENDING' AND id<>${excludeAdjustmentId}::uuid`;
+    return rows.length > 0;
+  }
+
+  private async updateAdjustmentStatus(tx: Prisma.TransactionClient, adjustmentId: string, status: string): Promise<void> {
+    await tx.$executeRaw`UPDATE attendance_adjustments SET status=${status} WHERE id=${adjustmentId}::uuid`;
+  }
+
+  private async insertValidation(
+    tx: Prisma.TransactionClient,
+    adjustmentId: string,
+    validatedByAccountId: string,
+    decision: string,
+    previousConfirmedAt: Date | string | null,
+    resultingConfirmedAt: Date | string | null,
+  ): Promise<void> {
+    await tx.$executeRaw`
+      INSERT INTO attendance_validations(adjustment_id,validated_by_account_id,decision,previous_confirmed_at,resulting_confirmed_at)
+      VALUES(${adjustmentId}::uuid,${validatedByAccountId}::uuid,${decision},${previousConfirmedAt}::timestamptz,${resultingConfirmedAt}::timestamptz)`;
+  }
+
+  private async updateRecordForDecision(
+    tx: Prisma.TransactionClient,
+    recordId: string,
+    resultingAt: Date | null,
+    deleted: boolean,
+    type: string,
+    managerConfirmed: boolean,
+  ): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE attendance_records SET confirmed_occurred_at=${resultingAt}::timestamptz,
+        effective_occurred_at=COALESCE(${resultingAt}::timestamptz,original_occurred_at),confirmed_deleted=${deleted},effective_deleted=${deleted},
+        sign_type=${type},manager_confirmed=manager_confirmed OR ${managerConfirmed},version=version+1
+      WHERE id=${recordId}::uuid`;
+  }
+
+  private async queryAdjustmentWorkerByCode(tx: Prisma.TransactionClient, code: string | null, accountId: string): Promise<AdjustmentWorkerLookupRow | undefined> {
+    const [worker] = await tx.$queryRaw<AdjustmentWorkerLookupRow[]>`
+      SELECT w.id FROM workers w JOIN accounts a ON a.id=w.account_id
+      WHERE (a.login_code=${code} OR (${code}='__self__' AND a.id=${accountId}::uuid) OR ${code}='__worker__'||w.id::text) AND a.status='ACTIVE'`;
+    return worker;
+  }
+
+  private async insertManualAdjustmentRecord(
+    tx: Prisma.TransactionClient,
+    workerId: string,
+    shopId: string,
+    accountId: string,
+    type: string,
+    occurredAt: string,
+  ): Promise<AdjustmentRecordRow> {
+    const [record] = await tx.$queryRaw<AdjustmentRecordRow[]>`
+      INSERT INTO attendance_records(worker_id,shop_id,submitted_by_account_id,sign_type,source,original_occurred_at,effective_occurred_at,camera_status)
+      VALUES(${workerId}::uuid,${shopId}::uuid,${accountId}::uuid,${type},'MANUAL_ADD',${occurredAt}::timestamptz,${occurredAt}::timestamptz,'NOT_APPLICABLE')
+      RETURNING *`;
+    return record!;
+  }
+
+  private async lockAdjustmentRecordById(tx: Prisma.TransactionClient, recordId: string): Promise<AdjustmentWorkerLoadRow | undefined> {
+    const [record] = await tx.$queryRaw<AdjustmentWorkerLoadRow[]>`
+      SELECT r.*,wa.login_code AS worker_code,sa.login_code AS shop_code FROM attendance_records r
+      JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id JOIN accounts sa ON sa.id=s.account_id
+      WHERE r.id=${recordId}::uuid FOR UPDATE OF r`;
+    return record;
+  }
+
+  private async lockPendingAdjustments(tx: Prisma.TransactionClient, recordId: string): Promise<PendingAdjustmentRow[]> {
+    return tx.$queryRaw<PendingAdjustmentRow[]>`SELECT * FROM attendance_adjustments WHERE record_id=${recordId}::uuid AND status='PENDING' FOR UPDATE`;
+  }
+
+  private async insertManagerAdjustment(
+    tx: Prisma.TransactionClient,
+    record: AdjustmentRecordRow,
+    accountId: string,
+    action: string,
+    after: string | null,
+    type: string | null,
+  ): Promise<AdjustmentIdRow> {
+    const beforeAt = action === 'ADD' ? null : record.effective_occurred_at;
+    const beforeType = action === 'ADD' ? null : record.sign_type;
+
+    const [adjustment] = await tx.$queryRaw<AdjustmentIdRow[]>`
+      INSERT INTO attendance_adjustments(record_id,actor_account_id,source,action,before_at,after_at,base_version,status,before_type,after_type)
+      VALUES(${record.id}::uuid,${accountId}::uuid,'MANAGER_EDIT',${action},${beforeAt}::timestamptz,${after}::timestamptz,${record.version},'APPROVED',${beforeType},${type})
+      RETURNING id`;
+    return adjustment!;
+  }
+
+  private async updateRecordForManagerEdit(tx: Prisma.TransactionClient, recordId: string, type: string, after: string | null, deleting: boolean): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE attendance_records SET sign_type=${type},effective_occurred_at=COALESCE(${after}::timestamptz,effective_occurred_at),
+        confirmed_occurred_at=COALESCE(${after}::timestamptz,confirmed_occurred_at),effective_deleted=${deleting},confirmed_deleted=${deleting},
+        manager_confirmed=true,version=version+1
+      WHERE id=${recordId}::uuid`;
+  }
+
+  private async insertWorkerAdjustment(
+    tx: Prisma.TransactionClient,
+    record: AdjustmentRecordRow,
+    accountId: string,
+    action: string,
+    after: string | null,
+    type: string | null,
+  ): Promise<AdjustmentIdRow> {
+    const beforeAt = action === 'ADD' ? null : record.effective_occurred_at;
+    const beforeType = action === 'ADD' ? null : record.sign_type;
+
+    const [adjustment] = await tx.$queryRaw<AdjustmentIdRow[]>`
+      INSERT INTO attendance_adjustments(record_id,actor_account_id,source,action,before_at,after_at,base_version,before_type,after_type)
+      VALUES(${record.id}::uuid,${accountId}::uuid,'WORKER_EDIT',${action},${beforeAt}::timestamptz,${after}::timestamptz,${record.version},${beforeType},${type})
+      RETURNING id`;
+    return adjustment!;
+  }
+
+  private async updatePendingAdjustment(
+    tx: Prisma.TransactionClient,
+    adjustmentId: string,
+    accountId: string,
+    action: string,
+    after: string | null,
+    type: string | null,
+    baseVersion: number,
+  ): Promise<AdjustmentIdRow> {
+    const [adjustment] = await tx.$queryRaw<AdjustmentIdRow[]>`
+      UPDATE attendance_adjustments SET actor_account_id=${accountId}::uuid,action=${action},after_at=${after}::timestamptz,after_type=${type},base_version=${baseVersion}
+      WHERE id=${adjustmentId}::uuid RETURNING id`;
+    return adjustment!;
+  }
+
+  private async updateRecordForPendingEdit(tx: Prisma.TransactionClient, recordId: string, after: string | null, deleting: boolean): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE attendance_records SET effective_occurred_at=COALESCE(${after}::timestamptz,effective_occurred_at),effective_deleted=${deleting},version=version+1
+      WHERE id=${recordId}::uuid`;
+  }
+
+  private async queryPendingAdjustments(
+    c: Queryable,
+    role: string,
+    accountId: string,
+    period: MonthBounds,
+    shopCode: string | null,
+    workerCode: string | null,
+  ): Promise<AdjustmentQueueRow[]> {
+    return c.$queryRaw<AdjustmentQueueRow[]>`
+      SELECT j.*,r.version,r.original_occurred_at,r.confirmed_occurred_at,wa.name AS worker_name,s.name AS shop_name,'ADJUSTMENT' AS item_type
+      FROM attendance_adjustments j JOIN attendance_records r ON r.id=j.record_id
+      JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id JOIN accounts sa ON sa.id=s.account_id
+      WHERE (${role} IN('SUPER_MANAGER','GENERAL_MANAGER') OR w.account_id=${accountId}::uuid
+         OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=${accountId}::uuid)
+         OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.worker_id=w.id AND mw.manager_account_id=${accountId}::uuid))
+        AND r.effective_occurred_at >= ${period.start}::timestamptz AND r.effective_occurred_at < ${period.end}::timestamptz
+        AND (${shopCode}::text IS NULL OR sa.login_code=${shopCode}) AND (${workerCode}::text IS NULL OR wa.login_code=${workerCode})
+        AND j.status='PENDING'
+      ORDER BY j.created_at`;
+  }
+
+  private async queryInvalidIssues(
+    c: Queryable,
+    role: string,
+    accountId: string,
+    period: MonthBounds,
+    shopCode: string | null,
+    workerCode: string | null,
+  ): Promise<IssueQueueRow[]> {
+    return c.$queryRaw<IssueQueueRow[]>`
+      SELECT g.id,g.issue_code,g.sign_in_record_id,g.sign_out_record_id,r.version,w.id AS worker_id,
+        COALESCE(wa.login_code,'__worker__'||w.id::text) AS worker_code,sa.login_code AS shop_code,
+        (r.effective_occurred_at AT TIME ZONE ${ATTENDANCE_ZONE})::date::text AS local_date,
+        r.original_occurred_at,wa.name AS worker_name,s.name AS shop_name,'RECORD_ERROR' AS item_type
+      FROM work_segments g JOIN attendance_records r ON r.id=COALESCE(g.sign_in_record_id,g.sign_out_record_id)
+      JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id JOIN accounts sa ON sa.id=s.account_id
+      WHERE (${role} IN('SUPER_MANAGER','GENERAL_MANAGER') OR w.account_id=${accountId}::uuid
+         OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=${accountId}::uuid)
+         OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.worker_id=w.id AND mw.manager_account_id=${accountId}::uuid))
+        AND r.effective_occurred_at >= ${period.start}::timestamptz AND r.effective_occurred_at < ${period.end}::timestamptz
+        AND (${shopCode}::text IS NULL OR sa.login_code=${shopCode}) AND (${workerCode}::text IS NULL OR wa.login_code=${workerCode})
+        AND g.status='INVALID'`;
+  }
+
+  private async queryPendingPeople(c: Queryable): Promise<PersonApprovalRow[]> {
+    return c.$queryRaw<PersonApprovalRow[]>`
+      SELECT id AS account_id,name AS worker_name,email,profile_version AS version,role,'PERSON_APPROVAL' AS item_type,'NEW_PERSON' AS source
+      FROM accounts WHERE status='PENDING' AND requires_manager_approval AND password_hash IS NOT NULL AND role IN('WORKER','MANAGER')
+      ORDER BY created_at`;
   }
 
   /** Mirrors legacy's `staffAttendanceScope()` — the set of workers/shops a manager's staff view resolves to. */

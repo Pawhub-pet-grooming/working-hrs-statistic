@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { Account } from '../auth/types.js';
+import { BACKEND_ROLES, type Account, type Role } from '../auth/types.js';
 import { apiError } from '../common/api-error.js';
 import type { DbService } from '../database/db.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -35,5 +35,17 @@ export class ScopeService {
     if (this.isCompanyAdmin(account)) return;
     const count = await c.manager_workers.count({ where: { manager_account_id: account.id, worker_id: workerId } });
     if (!count) throw apiError(403, 'Groomer outside your scope', 'WORKER_FORBIDDEN');
+  }
+
+  /** Mirrors legacy's `assertRecordScope()` — an attendance record is in scope if the shop or the worker is. */
+  async assertRecordScope(c: Queryable, account: Account, shopId: string, workerId: string): Promise<void> {
+    if (BACKEND_ROLES.includes(account.role as Role)) {
+      const ownWorker = await c.workers.count({ where: { id: workerId, account_id: account.id } });
+      if (ownWorker) return;
+    }
+
+    if (await this.allowed(c, account, shopId)) return;
+
+    await this.assertWorker(c, account, workerId);
   }
 }

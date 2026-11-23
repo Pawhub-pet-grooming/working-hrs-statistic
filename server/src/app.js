@@ -40,7 +40,6 @@ const fail = (status, message, code = "REQUEST_FAILED") => {
   throw Object.assign(new Error(message), { status, code });
 };
 const uuid = z.string().uuid();
-const instant = z.iso.datetime({ offset: true });
 const backend = ["MANAGER", "GENERAL_MANAGER", "SUPER_MANAGER"];
 const companyAdmin = account => ["GENERAL_MANAGER", "SUPER_MANAGER"].includes(account.role);
 app.get("/api/v1/health", async (req, res) => {
@@ -292,122 +291,11 @@ async function summary(req, c = pool) {
 // GET /manager/attendance (paginated) and /summary migrated to server-nest's
 // ManagerAttendanceController (Epic 3). records()/summary()/filters()/recordScopeSql stay —
 // POST /manager/reports/pdf (ReportsModule, not yet migrated) still calls them.
-app.get(
-  ["/api/v1/manager/attendance/:id/history", "/api/v1/attendance/:id/history"],
-  async (req, res) => {
-    uuid.parse(req.params.id);
-    const r = (
-      await pool.query("SELECT * FROM attendance_records WHERE id=$1", [
-        req.params.id,
-      ])
-    ).rows[0];
-    if (!r) fail(404, "Record not found");
-    if (req.account.role === "WORKER") {
-      const w = (
-        await pool.query("SELECT account_id FROM workers WHERE id=$1", [
-          r.worker_id,
-        ])
-      ).rows[0];
-      if (w.account_id !== req.account.id) fail(403, "Only your own history");
-    } else await assertRecordScope(pool, req.account, r.shop_id, r.worker_id);
-    const history = (
-      await pool.query(
-        "SELECT a.*,v.decision,v.validated_at,u.name AS validator FROM attendance_adjustments a LEFT JOIN attendance_validations v ON v.adjustment_id=a.id LEFT JOIN accounts u ON u.id=v.validated_by_account_id WHERE a.record_id=$1 ORDER BY a.created_at",
-        [r.id],
-      )
-    ).rows;
-    res.json({ data: { record: r, history } });
-  },
-);
-app.get("/api/v1/manager/validations", async (req, res) => {
-  const f = filters(req);
-  const adjustments = (
-    await pool.query(
-      `SELECT j.*,r.version,r.original_occurred_at,r.confirmed_occurred_at,wa.name AS worker_name,s.name AS shop_name,'ADJUSTMENT' AS item_type ${filtered.replace("FROM attendance_records r", "FROM attendance_adjustments j JOIN attendance_records r ON r.id=j.record_id")} AND j.status='PENDING' ORDER BY j.created_at`,
-      f,
-    )
-  ).rows;
-  const issues = (
-    await pool.query(
-      `SELECT g.id,g.issue_code,g.sign_in_record_id,g.sign_out_record_id,r.version,w.id AS worker_id,COALESCE(wa.login_code,'__worker__'||w.id::text) AS worker_code,sa.login_code AS shop_code,(r.effective_occurred_at AT TIME ZONE 'Pacific/Auckland')::date::text AS local_date,r.original_occurred_at,wa.name AS worker_name,s.name AS shop_name,'RECORD_ERROR' AS item_type ${filtered.replace("FROM attendance_records r", "FROM work_segments g JOIN attendance_records r ON r.id=COALESCE(g.sign_in_record_id,g.sign_out_record_id)")} AND g.status='INVALID'`,
-      f,
-    )
-  ).rows;
-  const people = req.account.role === "GENERAL_MANAGER" ? (await pool.query("SELECT id AS account_id,name AS worker_name,email,profile_version AS version,role,'PERSON_APPROVAL' AS item_type,'NEW_PERSON' AS source FROM accounts WHERE status='PENDING' AND requires_manager_approval AND password_hash IS NOT NULL AND role IN('WORKER','MANAGER') ORDER BY created_at")).rows : [];
-  res.json({ data: [...people, ...adjustments, ...issues] });
-});
-app.post("/api/v1/manager/validations/:id/decision", async (req, res) => {
-  uuid.parse(req.params.id);
-  const b = z
-    .object({
-      operationId: uuid,
-      decision: z.enum(["APPROVE", "REJECT"]),
-      expectedRecordVersion: z.number().int().positive(),
-    })
-    .parse(req.body);
-  const data = await transaction((c) =>
-    idem(
-      c,
-      req.account,
-      { ...b, adjustmentId: req.params.id },
-      "VALIDATION",
-      async () => {
-        const reference = (await c.query("SELECT record_id FROM attendance_adjustments WHERE id=$1", [req.params.id])).rows[0];
-        if (!reference) fail(404, "Adjustment missing");
-        const r = (await c.query("SELECT * FROM attendance_records WHERE id=$1 FOR UPDATE", [reference.record_id])).rows[0];
-        const j = (await c.query("SELECT * FROM attendance_adjustments WHERE id=$1 FOR UPDATE", [req.params.id])).rows[0];
-        await assertRecordScope(c, req.account, r.shop_id, r.worker_id);
-        if (r.version !== b.expectedRecordVersion || j.status !== "PENDING")
-          fail(409, "Record changed; reload", "VERSION_CONFLICT");
-        if (
-          (
-            await c.query(
-              "SELECT 1 FROM attendance_adjustments WHERE record_id=$1 AND status='PENDING' AND id<>$2",
-              [r.id, j.id],
-            )
-          ).rowCount
-        )
-          fail(409, "Multiple adjustments require manual resolution");
-        const t =
-          b.decision === "APPROVE" ? j.after_at : r.confirmed_occurred_at;
-        const deleted =
-          b.decision === "APPROVE"
-            ? j.action === "DELETE"
-            : r.confirmed_deleted;
-        await c.query(
-          "UPDATE attendance_adjustments SET status=$1 WHERE id=$2",
-          [b.decision === "APPROVE" ? "APPROVED" : "REJECTED", j.id],
-        );
-        await c.query(
-          "INSERT INTO attendance_validations(adjustment_id,validated_by_account_id,decision,previous_confirmed_at,resulting_confirmed_at) VALUES($1,$2,$3,$4,$5)",
-          [j.id, req.account.id, b.decision, r.confirmed_occurred_at, t],
-        );
-        await c.query(
-          "UPDATE attendance_records SET confirmed_occurred_at=$1,effective_occurred_at=COALESCE($1,original_occurred_at),confirmed_deleted=$2,effective_deleted=$2,sign_type=$4,manager_confirmed=manager_confirmed OR $5,version=version+1 WHERE id=$3",
-          [t, deleted, r.id, b.decision === "APPROVE" ? (j.after_type || r.sign_type) : r.sign_type, b.decision === "APPROVE"],
-        );
-        await rebuild(c, r.worker_id);
-        await audit(c, req.account, "VALIDATION_" + b.decision, r.id);
-        return { recordId: r.id, version: r.version + 1 };
-      },
-    ),
-  );
-  res.json({ data });
-});
-app.post("/api/v1/manager/attendance/:id/corrections", async (req, res) => {
-  uuid.parse(req.params.id);
-  const b = z
-    .object({
-      operationId: uuid,
-      expectedRecordVersion: z.number().int().positive(),
-      occurredAt: instant,
-      type: z.enum(["SIGN_IN", "SIGN_OUT"]).optional(),
-    })
-    .parse(req.body);
-  req.body = { operationId: b.operationId, action: "UPDATE", recordId: req.params.id,
-    expectedVersion: b.expectedRecordVersion, occurredAt: b.occurredAt, type: b.type };
-  return attendanceAdjustment(req, res);
-});
+// GET [/manager/attendance/:id/history, /attendance/:id/history], GET /manager/validations,
+// POST /manager/validations/:id/decision, and POST /manager/attendance/:id/corrections migrated
+// to server-nest's AttendanceController/ManagerAttendanceController/ValidationsController
+// (Epic 3). assertRecordScope()/rebuild() stay — reports/pdf, the photos route, and index.js's
+// maintenance loop still call them.
 // POST /attendance (clock in/out) and GET /attendance/status migrated to server-nest's
 // AttendanceController (Epic 3). appScope()/dailyAttendanceCount()/rebuild() stay — the
 // not-yet-migrated staff/personal listing, export, and adjustment routes below still use them.
@@ -617,105 +505,8 @@ app.get("/api/v1/attendance/summary", async (req, res) => {
   );
   res.json({ data: { segments: r.rows } });
 });
-async function attendanceAdjustment(req, res) {
-  const managerEndpoint = req.path.includes("/manager/");
-  const managerRequest = backend.includes(req.account.role);
-  const b = z
-    .object({
-      operationId: uuid,
-      action: z.enum(["ADD", "UPDATE", "DELETE"]),
-      recordId: uuid.optional(),
-      expectedVersion: z.number().int().positive().optional(),
-      occurredAt: instant.optional(),
-      workerId: z.string().optional(),
-      shopId: z.string().optional(),
-      type: z.enum(["SIGN_IN", "SIGN_OUT"]).optional(),
-    })
-    .parse(req.body);
-  const data = await transaction((c) =>
-    idem(c, req.account, b, "ADJUSTMENT", async () => {
-      let r;
-      if (b.action === "ADD") {
-        if (!b.occurredAt || !b.type) fail(422, "Time and type required");
-        let w, s;
-        if (managerEndpoint) {
-          w = (await c.query("SELECT w.* FROM workers w JOIN accounts a ON a.id=w.account_id WHERE (a.login_code=$1 OR ($1='__self__' AND a.id=$2) OR $1='__worker__'||w.id::text) AND a.status='ACTIVE'", [b.workerId,req.account.id])).rows[0];
-          s = (await c.query("SELECT s.* FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=$1", [b.shopId])).rows[0];
-          if (!w || !s) fail(422, "Active employee and store required");
-          await assertRecordScope(c, req.account, s.id, w.id);
-        } else ({ w, s } = await appScope(req, c, b.shopId, b.workerId || req.account.login_code));
-        await c.query("SELECT id FROM workers WHERE id=$1 FOR UPDATE", [w.id]);
-        r = (
-          await c.query(
-            "INSERT INTO attendance_records(worker_id,shop_id,submitted_by_account_id,sign_type,source,original_occurred_at,effective_occurred_at,camera_status) VALUES($1,$2,$3,$4,'MANUAL_ADD',$5,$5,'NOT_APPLICABLE') RETURNING *",
-            [w.id, s.id, req.account.id, b.type, b.occurredAt],
-          )
-        ).rows[0];
-      } else {
-        if (!b.recordId || !b.expectedVersion)
-          fail(422, "Record and version required");
-        r = (
-          await c.query(
-            "SELECT r.*,wa.login_code AS worker_code,sa.login_code AS shop_code FROM attendance_records r JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id JOIN accounts sa ON sa.id=s.account_id WHERE r.id=$1 FOR UPDATE OF r",
-            [b.recordId],
-          )
-        ).rows[0];
-        if (!r) fail(404, "Record missing");
-        if (managerEndpoint) await assertRecordScope(c, req.account, r.shop_id, r.worker_id);
-        else {
-          const own = (await c.query("SELECT account_id FROM workers WHERE id=$1", [r.worker_id])).rows[0];
-          if (req.account.role !== "SHOP" && own.account_id !== req.account.id) fail(403, "Only your own records");
-          await appScope(req, c, r.shop_code, r.worker_code);
-        }
-        if (!managerRequest && r.manager_confirmed) fail(403, "Confirmed records can only be changed by a manager", "RECORD_CONFIRMED");
-        if (r.confirmed_deleted) fail(409, "Record is already marked for removal");
-        if (r.version !== b.expectedVersion) fail(409, "Record changed");
-        if (b.action === "UPDATE" && !b.occurredAt) fail(422, "Time required");
-      }
-      const pending = (await c.query("SELECT * FROM attendance_adjustments WHERE record_id=$1 AND status='PENDING' FOR UPDATE", [r.id])).rows;
-      if (!managerRequest && pending.length > 1) fail(409, "Multiple pending changes require manager resolution");
-      if (managerRequest) {
-        for (const old of pending) {
-          await c.query("UPDATE attendance_adjustments SET status='REJECTED' WHERE id=$1",[old.id]);
-          await c.query("INSERT INTO attendance_validations(adjustment_id,validated_by_account_id,decision,previous_confirmed_at,resulting_confirmed_at) VALUES($1,$2,'REJECT',$3,$3)",[old.id,req.account.id,r.confirmed_occurred_at]);
-          await audit(c,req.account,"ATTENDANCE_REQUEST_SUPERSEDED",r.id,{adjustmentId:old.id},{reason:"Direct manager change"});
-        }
-        const deleting=b.action === "DELETE", type=b.type || r.sign_type, after=deleting ? null : b.occurredAt;
-        const adjustment=(await c.query("INSERT INTO attendance_adjustments(record_id,actor_account_id,source,action,before_at,after_at,base_version,status,before_type,after_type) VALUES($1,$2,'MANAGER_EDIT',$3,$4,$5,$6,'APPROVED',$7,$8) RETURNING id",[r.id,req.account.id,b.action,b.action==='ADD'?null:r.effective_occurred_at,after,r.version,b.action==='ADD'?null:r.sign_type,deleting?null:type])).rows[0];
-        await c.query("INSERT INTO attendance_validations(adjustment_id,validated_by_account_id,decision,previous_confirmed_at,resulting_confirmed_at) VALUES($1,$2,'APPROVE',$3,$4)",[adjustment.id,req.account.id,r.confirmed_occurred_at,after]);
-        await c.query("UPDATE attendance_records SET sign_type=$2,effective_occurred_at=COALESCE($3,effective_occurred_at),confirmed_occurred_at=COALESCE($3,confirmed_occurred_at),effective_deleted=$4,confirmed_deleted=$4,manager_confirmed=true,version=version+1 WHERE id=$1",[r.id,type,after,deleting]);
-        await rebuild(c,r.worker_id);
-        await audit(c,req.account,"ATTENDANCE_MANAGER_"+b.action,r.id,{time:r.effective_occurred_at,type:r.sign_type},{time:after,type:deleting?null:type});
-        return {recordId:r.id,adjustmentId:adjustment.id,recordStatus:deleting?"removal":"active",validationStatus:"APPROVED",version:r.version+1};
-      }
-      const after = b.action === "DELETE" ? null : b.occurredAt;
-      const finalType = b.type || pending[0]?.after_type || r.sign_type;
-      const j = pending.length
-        ? (await c.query("UPDATE attendance_adjustments SET actor_account_id=$2,action=$3,after_at=$4,after_type=$5,base_version=$6 WHERE id=$1 RETURNING id",
-            [pending[0].id, req.account.id, b.action, after, b.action === "DELETE" ? null : finalType, r.version])).rows[0]
-        : (await c.query(
-            "INSERT INTO attendance_adjustments(record_id,actor_account_id,source,action,before_at,after_at,base_version,before_type,after_type) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
-            [r.id, req.account.id, managerRequest ? "MANAGER_EDIT" : "WORKER_EDIT", b.action,
-              b.action === "ADD" ? null : r.original_occurred_at, after, r.version,
-              b.action === "ADD" ? null : r.sign_type, b.action === "DELETE" ? null : finalType],
-          )).rows[0];
-      await c.query(
-        "UPDATE attendance_records SET effective_occurred_at=COALESCE($1,effective_occurred_at),effective_deleted=$2,version=version+1 WHERE id=$3",
-        [after, b.action === "DELETE", r.id],
-      );
-      await rebuild(c, r.worker_id);
-      await audit(c, req.account, "ATTENDANCE_" + (b.action === "DELETE" ? "REMOVAL" : b.action) + "_REQUEST", r.id);
-      return {
-        recordId: r.id,
-        recordStatus: b.action === "DELETE" ? "removal" : "active",
-        adjustmentId: j.id,
-        validationStatus: "PENDING",
-      };
-    }),
-  );
-  res.status(req.path.endsWith("/corrections") ? 200 : 201).json({ data });
-}
-app.post(["/api/v1/attendance-adjustments", "/api/v1/manager/attendance-adjustments"], attendanceAdjustment);
+// POST /attendance-adjustments, /manager/attendance-adjustments migrated to server-nest's
+// AttendanceAdjustmentsController/ManagerAttendanceAdjustmentsController (Epic 3).
 app.post("/api/v1/photos", upload.single("file"), async (req, res) => {
   if (!["SHOP", "WORKER", ...backend].includes(req.account.role))
     fail(403, "App account required");
