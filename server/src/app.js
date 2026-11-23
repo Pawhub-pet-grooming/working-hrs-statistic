@@ -1,6 +1,5 @@
 import { mountAndroidDownload } from "./android-download.js";
 import { mountStoreDownload } from "./store-download.js";
-import { attendanceLocation } from "./attendance-location.js";
 import { dailyAttendanceHours, totalAttendanceHours } from "./attendance-hours.js";
 import express from "express";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -572,21 +571,11 @@ async function personalAttendanceScope(c,req,shopCodes,workerCodes) {
   if(req.account.role==='SHOP') for(const id of scope.shopIds||[]) await assertShop(c,req.account,id);
   return {...scope,workerIds:[w.id]};
 }
-app.get("/api/v1/manager/staff-attendance/staff", async (req, res) => {
-  await pool.query("INSERT INTO workers(account_id,contact,address) VALUES($1,'','') ON CONFLICT(account_id) DO NOTHING",[req.account.id]);
-  const staff=(await pool.query(`SELECT w.id,a.name,COALESCE(a.login_code,CASE WHEN a.id=$2 THEN '__self__' ELSE '__worker__'||w.id::text END) AS "workerId",a.status FROM workers w JOIN accounts a ON a.id=w.account_id WHERE (($1 IN('GENERAL_MANAGER','SUPER_MANAGER') AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER')) OR (a.role='WORKER' AND EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2 AND mw.worker_id=w.id))) OR a.id=$2 ORDER BY a.name`,[req.account.role,req.account.id])).rows;
-  res.json({data:req.query.includeDeleted === "true" ? staff.filter(p=>["ACTIVE","DISABLED"].includes(p.status)) : staff.filter(p=>p.status === "ACTIVE")});
-});
-app.get("/api/v1/manager/attendance/locations", async(req,res)=>{
-  if(!companyAdmin(req.account))fail(403,"General manager or Owner required");
-  const range=z.object({fromDate:z.iso.date(),toDate:z.iso.date()}).parse(req.query);
-  if(range.fromDate>range.toDate || new Date(range.toDate)-new Date(range.fromDate)>30*86400000)fail(422,"Date range must be within 31 days");
-  const scope=await staffAttendanceScope(pool,req.account,req.query.shopIds,req.query.workerIds);
-  const cursor=z.coerce.number().int().min(0).default(0).parse(req.query.cursor);
-  const rows=(await pool.query(`SELECT r.id,r.photo_id,r.worker_id,r.shop_id,r.original_occurred_at,r.effective_occurred_at,r.confirmed_occurred_at,r.manager_confirmed,r.sign_type,r.location,wa.name AS worker_name,wa.login_code AS worker_code,s.name AS shop_name,s.latitude AS shop_latitude,s.longitude AS shop_longitude FROM attendance_records r JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id WHERE r.worker_id=ANY($1::uuid[]) AND ($2::uuid[] IS NULL OR r.shop_id=ANY($2::uuid[])) AND NOT r.confirmed_deleted AND (r.original_occurred_at AT TIME ZONE $3)::date BETWEEN $4::date AND $5::date ORDER BY r.original_occurred_at,r.id`,[scope.workerIds,scope.shopIds,zone,range.fromDate,range.toDate])).rows;
-  const records=rows.map(row=>{const gps=attendanceLocation(row.location,row.shop_latitude,row.shop_longitude);return {id:row.id,photoId:row.photo_id,workerId:row.worker_id,workerName:row.worker_name,workerCode:row.worker_code,shopName:row.shop_name,type:row.sign_type,originalTime:row.original_occurred_at,currentTime:row.effective_occurred_at,confirmedTime:row.manager_confirmed?row.confirmed_occurred_at:null,...(gps||{latitude:null,longitude:null,distanceMeters:null,accuracyMeters:null,capturedAt:null})};});
-  res.json({data:{items:records.slice(cursor,cursor+100),total:records.length,nextCursor:cursor+100<records.length?String(cursor+100):null}});
-});
+// GET /manager/staff-attendance/staff, GET /manager/attendance/locations, and the shared
+// GET /attendance + /manager/staff-attendance listing migrated to server-nest's
+// StaffAttendanceController/ManagerAttendanceController/AttendanceController (Epic 3).
+// attendanceDays()/staffAttendanceScope()/personalAttendanceScope()/attendanceStores() stay —
+// the not-yet-migrated export routes below still use them.
 function attendanceDays(records, staffMode) {
   const groups = new Map();
   for (const r of records) {
@@ -596,26 +585,6 @@ function attendanceDays(records, staffMode) {
   }
   return [...groups.values()].flatMap(rows=>dailyAttendanceHours(rows).map(day=>({...day,workerId:rows[0].worker_id,workerCode:rows[0].worker_code || "__worker__"+rows[0].worker_id,workerName:rows[0].worker_name,shopId:rows[0].shop_id,shopCode:rows[0].shop_code,shopName:rows[0].shop_name}))).sort((a,b)=>a.date.localeCompare(b.date)||a.workerName.localeCompare(b.workerName)||a.shopName.localeCompare(b.shopName));
 }
-app.get(["/api/v1/attendance", "/api/v1/manager/staff-attendance"], async (req, res) => {
-  const staffMode = req.path.startsWith("/api/v1/manager/");
-  let scope;
-  if (staffMode) scope = await staffAttendanceScope(pool, req.account, req.query.shopIds ?? req.query.shopId, req.query.workerIds ?? req.query.workerId, req.query.includeDeleted === "true");
-  else scope=await personalAttendanceScope(pool,req,req.query.shopIds ?? req.query.shopId,req.query.workerIds ?? req.query.workerId);
-  const range = z
-    .object({ fromDate: z.iso.date(), toDate: z.iso.date() })
-    .parse(req.query);
-  if (
-    range.fromDate > range.toDate ||
-    new Date(range.toDate) - new Date(range.fromDate) > 30 * 86400000
-  )
-    fail(422, "Date range must be within 31 days");
-  const r = await pool.query(
-    "SELECT r.*,wa.name AS worker_name,wa.login_code AS worker_code,sh.name AS shop_name,sa.login_code AS shop_code,(SELECT x.after_type FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING' LIMIT 1) AS pending_sign_type,EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING') AS pending FROM attendance_records r JOIN workers wr ON wr.id=r.worker_id JOIN accounts wa ON wa.id=wr.account_id JOIN shops sh ON sh.id=r.shop_id JOIN accounts sa ON sa.id=sh.account_id WHERE worker_id=ANY($1::uuid[]) AND ($2::uuid[] IS NULL OR r.shop_id=ANY($2::uuid[])) AND NOT confirmed_deleted AND (NOT effective_deleted OR EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING')) AND (effective_occurred_at AT TIME ZONE $3)::date BETWEEN $4::date AND $5::date ORDER BY effective_occurred_at,id",
-    [scope.workerIds, scope.shopIds, zone, range.fromDate, range.toDate],
-  );
-  const dailyHours = attendanceDays(r.rows, staffMode);
-  res.json({ data: { items: r.rows, dailyHours, totalHours: totalAttendanceHours(dailyHours) } });
-});
 app.post(["/api/v1/attendance/exports", "/api/v1/manager/staff-attendance/exports"], async (req, res) => {
   if (!["WORKER", ...backend].includes(req.account.role)) fail(403, "Personal employee account required");
   const b = z.object({ operationId: uuid, shopId: z.string().regex(/^00\d{2}$/).nullable().optional(),

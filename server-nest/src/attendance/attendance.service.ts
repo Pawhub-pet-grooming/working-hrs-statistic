@@ -6,7 +6,20 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { ScopeService } from '../organization/scope.service.js';
 import { ATTENDANCE_ZONE, localDate } from './attendance-domain.util.js';
-import type { ClockDto } from './attendance.schemas.js';
+import { dailyAttendanceHours, totalAttendanceHours, type AttendanceHoursRecord, type DailyHours } from './attendance-hours.util.js';
+import { attendanceLocation, type AttendanceLocationInput } from './attendance-location.util.js';
+import type { ClockDto, DateRangeDto } from './attendance.schemas.js';
+
+const SHOP_CODE_PATTERN = /^00\d{2}$/;
+const WORKER_CODE_PATTERN = /^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/;
+
+/** Shape of a repeated or comma-joined query param (`?x=a&x=b` or `?x=a,b`) before `selectedCodes` parses it. */
+type CodeQueryValue = string | string[] | undefined;
+
+/** Express's query parser only ever produces string, string[], or undefined for a query param. */
+function asCodeQueryValue(value: unknown): CodeQueryValue {
+  return value as CodeQueryValue;
+}
 
 interface AppScopeWorkerRow {
   id: string;
@@ -46,6 +59,78 @@ interface RebuildRecordRow {
   original_occurred_at: Date;
   confirmed_occurred_at: Date | null;
   pending: boolean;
+}
+
+interface AttendanceScope {
+  shopIds: string[] | null;
+  s: { name: string; id: string | null } | null;
+  workerIds: string[];
+  staffName?: string;
+  staffCode?: string | null;
+}
+
+interface AvailableStaffRow {
+  id: string;
+  account_id: string;
+  name: string;
+  login_code: string | null;
+  /** Absent on rows added via `queryAdditionalWorkersByCode` — only read when `includeDeleted` falls back to the primary query's rows. */
+  status?: string;
+}
+
+interface AdditionalStaffRow {
+  id: string;
+  account_id: string;
+  name: string;
+  login_code: string | null;
+}
+
+interface StoreRow {
+  id: string;
+  name: string;
+}
+
+interface StaffListingRow {
+  id: string;
+  name: string;
+  workerId: string;
+  status: string;
+}
+
+interface AttendanceListingRow extends AttendanceHoursRecord {
+  worker_id: string;
+  shop_id: string;
+  worker_name: string;
+  worker_code: string | null;
+  shop_name: string;
+  shop_code: string | null;
+}
+
+interface AttendanceDaySummary extends DailyHours {
+  workerId: string;
+  workerCode: string;
+  workerName: string;
+  shopId: string;
+  shopCode: string | null;
+  shopName: string;
+}
+
+interface LocationRow {
+  id: string;
+  photo_id: string | null;
+  worker_id: string;
+  shop_id: string;
+  original_occurred_at: Date;
+  effective_occurred_at: Date;
+  confirmed_occurred_at: Date | null;
+  manager_confirmed: boolean;
+  sign_type: string;
+  location: AttendanceLocationInput | null;
+  worker_name: string;
+  worker_code: string | null;
+  shop_name: string;
+  shop_latitude: string;
+  shop_longitude: string;
 }
 
 interface LocationPosition {
@@ -205,6 +290,229 @@ export class AttendanceService {
       const old = localDate(signIn.original_occurred_at) < localDate(new Date());
       await this.insertSegment(tx, workerId, signIn, null, old || crossShopUnclosed.has(signIn.id) ? 'MISSING_SIGN_OUT' : null);
     }
+  }
+
+  /** Mirrors legacy's shared `GET /attendance` + `GET /manager/staff-attendance` handler. */
+  async listRecords(account: Account, staffMode: boolean, range: DateRangeDto, rawQuery: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.checkRangeWithinAMonth(range);
+
+    const shopCodes = asCodeQueryValue(rawQuery.shopIds ?? rawQuery.shopId);
+    const workerCodes = asCodeQueryValue(rawQuery.workerIds ?? rawQuery.workerId);
+    const scope = staffMode
+      ? await this.staffAttendanceScope(this.db, account, shopCodes, workerCodes, rawQuery.includeDeleted === 'true')
+      : await this.personalAttendanceScope(this.db, account, shopCodes, workerCodes);
+
+    const rows = await this.queryAttendanceListing(this.db, scope.workerIds, scope.shopIds, range.fromDate, range.toDate);
+    const dailyHours = this.attendanceDays(rows);
+
+    return { items: rows, dailyHours, totalHours: totalAttendanceHours(dailyHours) };
+  }
+
+  /** Mirrors legacy's `GET /manager/staff-attendance/staff`. */
+  async listStaff(account: Account, includeDeleted: boolean): Promise<StaffListingRow[]> {
+    await this.ensureWorkerRow(this.db, account.id, '', '');
+
+    const staff = await this.queryStaffListing(this.db, account.role, account.id);
+
+    return includeDeleted ? staff.filter((p) => ['ACTIVE', 'DISABLED'].includes(p.status)) : staff.filter((p) => p.status === 'ACTIVE');
+  }
+
+  /** Mirrors legacy's `GET /manager/attendance/locations`. */
+  async listLocations(account: Account, range: DateRangeDto, cursor: number, rawQuery: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!this.scope.isCompanyAdmin(account)) throw apiError(403, 'General manager or Owner required');
+    this.checkRangeWithinAMonth(range);
+
+    const scope = await this.staffAttendanceScope(this.db, account, asCodeQueryValue(rawQuery.shopIds), asCodeQueryValue(rawQuery.workerIds));
+    const rows = await this.queryLocations(this.db, scope.workerIds, scope.shopIds, range.fromDate, range.toDate);
+
+    const records = rows.map((row) => {
+      const gps = attendanceLocation(row.location, row.shop_latitude, row.shop_longitude);
+      return {
+        id: row.id,
+        photoId: row.photo_id,
+        workerId: row.worker_id,
+        workerName: row.worker_name,
+        workerCode: row.worker_code,
+        shopName: row.shop_name,
+        type: row.sign_type,
+        originalTime: row.original_occurred_at,
+        currentTime: row.effective_occurred_at,
+        confirmedTime: row.manager_confirmed ? row.confirmed_occurred_at : null,
+        ...(gps ?? { latitude: null, longitude: null, distanceMeters: null, accuracyMeters: null, capturedAt: null }),
+      };
+    });
+
+    return {
+      items: records.slice(cursor, cursor + 100),
+      total: records.length,
+      nextCursor: cursor + 100 < records.length ? String(cursor + 100) : null,
+    };
+  }
+
+  /** Mirrors legacy's `staffAttendanceScope()` — the set of workers/shops a manager's staff view resolves to. */
+  async staffAttendanceScope(
+    c: Queryable,
+    actor: Account,
+    shopCodesValue: CodeQueryValue,
+    workerCodesValue: CodeQueryValue,
+    includeDeleted = true,
+  ): Promise<AttendanceScope> {
+    await this.ensureWorkerRow(c, actor.id, '', '');
+
+    const codes = this.selectedCodes(workerCodesValue, WORKER_CODE_PATTERN);
+    const available = await this.queryAvailableStaff(c, actor.role, actor.id);
+    const chosenShops = this.selectedCodes(shopCodesValue, SHOP_CODE_PATTERN);
+
+    if (actor.role === 'MANAGER' && codes.length && chosenShops.length === 1) {
+      const permitted = await this.queryManagerShopPermission(c, actor.id, chosenShops[0]!);
+      if (permitted) {
+        const additional = await this.queryAdditionalWorkersByCode(c, codes);
+        for (const row of additional) if (!available.some((r) => r.id === row.id)) available.push(row);
+      }
+    }
+
+    if (
+      codes.some((code) => !available.some((r) => r.login_code === code || code === '__worker__' + r.id || (code === '__self__' && r.account_id === actor.id)))
+    ) {
+      throw apiError(403, 'Staff outside your managed groomers');
+    }
+
+    const staff = codes.length
+      ? available.filter((r) => codes.includes(r.login_code ?? '') || codes.includes('__worker__' + r.id) || (codes.includes('__self__') && r.account_id === actor.id))
+      : available.filter((r) => includeDeleted || r.status === 'ACTIVE');
+
+    const stores = await this.attendanceStores(c, shopCodesValue);
+
+    return {
+      ...stores,
+      workerIds: staff.map((r) => r.id),
+      staffName: codes.length ? staff.map((r) => r.name).join(', ') : 'All accessible staff',
+      staffCode: staff.length === 1 ? staff[0]!.login_code : null,
+    };
+  }
+
+  /** Mirrors legacy's `personalAttendanceScope()` — a personal-app request scoped to the caller's own records. */
+  async personalAttendanceScope(c: Queryable, account: Account, shopCodesValue: CodeQueryValue, workerCodesValue: CodeQueryValue): Promise<AttendanceScope> {
+    const codes = this.selectedCodes(workerCodesValue, WORKER_CODE_PATTERN);
+    if (codes.length > 1) throw apiError(403, 'Only your own records');
+
+    const shops = this.selectedCodes(shopCodesValue, SHOP_CODE_PATTERN);
+    const { worker } = await this.resolveAppScope(c, account, account.role === 'SHOP' ? shops[0] : null, codes[0] || account.login_code, true);
+    const stores = await this.attendanceStores(c, shops);
+
+    if (account.role === 'SHOP') for (const id of stores.shopIds ?? []) await this.scope.assertShop(c, account, id);
+
+    return { ...stores, workerIds: [worker.id] };
+  }
+
+  /** Mirrors legacy's `attendanceStores()`. */
+  async attendanceStores(c: Queryable, value: CodeQueryValue): Promise<{ shopIds: string[] | null; s: { name: string; id: string | null } | null }> {
+    const codes = this.selectedCodes(value, SHOP_CODE_PATTERN);
+    if (!codes.length) return { shopIds: null, s: null };
+
+    const rows = await this.queryShopsByLoginCodes(c, codes);
+    if (rows.length !== codes.length) throw apiError(422, 'Unknown store');
+
+    return { shopIds: rows.map((r) => r.id), s: { name: rows.map((r) => r.name).join(', '), id: rows.length === 1 ? rows[0]!.id : null } };
+  }
+
+  private attendanceDays(records: AttendanceListingRow[]): AttendanceDaySummary[] {
+    const groups = new Map<string, AttendanceListingRow[]>();
+    for (const record of records) {
+      const key = `${record.worker_id}:${record.shop_id}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(record);
+    }
+
+    return [...groups.values()]
+      .flatMap((rows) =>
+        dailyAttendanceHours(rows).map((day) => ({
+          ...day,
+          workerId: rows[0]!.worker_id,
+          workerCode: rows[0]!.worker_code || '__worker__' + rows[0]!.worker_id,
+          workerName: rows[0]!.worker_name,
+          shopId: rows[0]!.shop_id,
+          shopCode: rows[0]!.shop_code,
+          shopName: rows[0]!.shop_name,
+        })),
+      )
+      .sort((a, b) => a.date.localeCompare(b.date) || a.workerName.localeCompare(b.workerName) || a.shopName.localeCompare(b.shopName));
+  }
+
+  /** Mirrors legacy's `selectedCodes()` — parses a comma-joined or repeated query value into a deduped, pattern-validated code list. */
+  private selectedCodes(value: string | string[] | undefined, pattern: RegExp): string[] {
+    if (value == null || value === '') return [];
+
+    const list = Array.isArray(value) ? value : value.split(',');
+    if (list.length > 200) throw apiError(422, 'Too many codes selected');
+    for (const code of list) if (!pattern.test(code)) throw apiError(422, 'Invalid code');
+
+    return [...new Set(list)];
+  }
+
+  private checkRangeWithinAMonth(range: DateRangeDto): void {
+    if (range.fromDate > range.toDate || new Date(range.toDate).getTime() - new Date(range.fromDate).getTime() > 30 * 86400000) {
+      throw apiError(422, 'Date range must be within 31 days');
+    }
+  }
+
+  private async queryAvailableStaff(c: Queryable, role: string, accountId: string): Promise<AvailableStaffRow[]> {
+    return c.$queryRaw<AvailableStaffRow[]>`
+      SELECT w.id,a.id AS account_id,a.name,a.login_code,a.status FROM workers w JOIN accounts a ON a.id=w.account_id
+      WHERE (${role} IN('GENERAL_MANAGER','SUPER_MANAGER') AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER'))
+         OR (a.role='WORKER' AND EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=${accountId}::uuid AND mw.worker_id=w.id))
+         OR a.id=${accountId}::uuid
+      ORDER BY a.name`;
+  }
+
+  private async queryManagerShopPermission(c: Queryable, accountId: string, shopCode: string): Promise<boolean> {
+    const rows = await c.$queryRaw<{ exists: true }[]>`
+      SELECT 1 AS exists FROM account_shops x JOIN shops s ON s.id=x.shop_id JOIN accounts a ON a.id=s.account_id
+      WHERE x.account_id=${accountId}::uuid AND a.login_code=${shopCode}`;
+    return rows.length > 0;
+  }
+
+  private async queryAdditionalWorkersByCode(c: Queryable, codes: string[]): Promise<AdditionalStaffRow[]> {
+    return c.$queryRaw<AdditionalStaffRow[]>`
+      SELECT w.id,a.id AS account_id,a.name,a.login_code FROM workers w JOIN accounts a ON a.id=w.account_id
+      WHERE a.role='WORKER' AND (a.login_code=ANY(${codes}::text[]) OR '__worker__'||w.id::text=ANY(${codes}::text[]))`;
+  }
+
+  private async queryShopsByLoginCodes(c: Queryable, codes: string[]): Promise<StoreRow[]> {
+    return c.$queryRaw<StoreRow[]>`SELECT s.id,s.name FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=ANY(${codes}::text[]) ORDER BY s.name`;
+  }
+
+  private async queryStaffListing(c: Queryable, role: string, accountId: string): Promise<StaffListingRow[]> {
+    return c.$queryRaw<StaffListingRow[]>`
+      SELECT w.id,a.name,COALESCE(a.login_code,CASE WHEN a.id=${accountId}::uuid THEN '__self__' ELSE '__worker__'||w.id::text END) AS "workerId",a.status
+      FROM workers w JOIN accounts a ON a.id=w.account_id
+      WHERE ((${role} IN('GENERAL_MANAGER','SUPER_MANAGER') AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER'))
+         OR (a.role='WORKER' AND EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=${accountId}::uuid AND mw.worker_id=w.id)))
+         OR a.id=${accountId}::uuid
+      ORDER BY a.name`;
+  }
+
+  private async queryAttendanceListing(c: Queryable, workerIds: string[], shopIds: string[] | null, fromDate: string, toDate: string): Promise<AttendanceListingRow[]> {
+    return c.$queryRaw<AttendanceListingRow[]>`
+      SELECT r.*,wa.name AS worker_name,wa.login_code AS worker_code,sh.name AS shop_name,sa.login_code AS shop_code,
+        (SELECT x.after_type FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING' LIMIT 1) AS pending_sign_type,
+        EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING') AS pending
+      FROM attendance_records r JOIN workers wr ON wr.id=r.worker_id JOIN accounts wa ON wa.id=wr.account_id
+      JOIN shops sh ON sh.id=r.shop_id JOIN accounts sa ON sa.id=sh.account_id
+      WHERE worker_id=ANY(${workerIds}::uuid[]) AND (${shopIds}::uuid[] IS NULL OR r.shop_id=ANY(${shopIds}::uuid[])) AND NOT confirmed_deleted
+        AND (NOT effective_deleted OR EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING'))
+        AND (effective_occurred_at AT TIME ZONE ${ATTENDANCE_ZONE})::date BETWEEN ${fromDate}::date AND ${toDate}::date
+      ORDER BY effective_occurred_at,id`;
+  }
+
+  private async queryLocations(c: Queryable, workerIds: string[], shopIds: string[] | null, fromDate: string, toDate: string): Promise<LocationRow[]> {
+    return c.$queryRaw<LocationRow[]>`
+      SELECT r.id,r.photo_id,r.worker_id,r.shop_id,r.original_occurred_at,r.effective_occurred_at,r.confirmed_occurred_at,r.manager_confirmed,r.sign_type,r.location,
+        wa.name AS worker_name,wa.login_code AS worker_code,s.name AS shop_name,s.latitude AS shop_latitude,s.longitude AS shop_longitude
+      FROM attendance_records r JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id
+      WHERE r.worker_id=ANY(${workerIds}::uuid[]) AND (${shopIds}::uuid[] IS NULL OR r.shop_id=ANY(${shopIds}::uuid[])) AND NOT r.confirmed_deleted
+        AND (r.original_occurred_at AT TIME ZONE ${ATTENDANCE_ZONE})::date BETWEEN ${fromDate}::date AND ${toDate}::date
+      ORDER BY r.original_occurred_at,r.id`;
   }
 
   private async checkDailyCountExpectation(

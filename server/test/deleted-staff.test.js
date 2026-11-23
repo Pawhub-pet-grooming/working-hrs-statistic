@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
 import argon2 from 'argon2';
 import {pool} from '../src/db.js';
-import {app} from '../src/app.js';
+import {createCombinedTestServer} from '../../server-nest/dist/test-support/combined-app.js';
 
 test('Deleted staff are opt-in while historical records remain editable and exportable', {skip:!process.env.TEST_DATABASE_URL}, async()=>{
  assert.ok(new URL(process.env.TEST_DATABASE_URL).pathname.endsWith('_test'));
@@ -20,7 +20,7 @@ test('Deleted staff are opt-in while historical records remain editable and expo
  const record=(await pool.query("INSERT INTO attendance_records(worker_id,shop_id,submitted_by_account_id,sign_type,source,original_occurred_at,effective_occurred_at,camera_status) VALUES($1,$2,$3,'SIGN_IN','MANUAL_ADD','2026-11-02T09:00:00+13:00','2026-11-02T09:00:00+13:00','NOT_APPLICABLE') RETURNING id",[people[1].id,shop.id,owner.id])).rows[0];
  const token=randomUUID();
  await pool.query("INSERT INTO sessions(account_id,token_hash,expires_at) VALUES($1,$2,now()+interval '1 hour')",[owner.id,createHash('sha256').update(token).digest('hex')]);
- const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+ const server=await createCombinedTestServer();server.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  const base=`http://127.0.0.1:${server.address().port}/api/v1`;
  const request=async(path,body)=>{const r=await fetch(base+path,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${token}`,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json()};};
  try{

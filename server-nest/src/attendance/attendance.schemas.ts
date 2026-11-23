@@ -31,3 +31,12 @@ export const statusQuerySchema = z.object({
   workerId: z.string().optional(),
 });
 export type StatusQueryDto = z.infer<typeof statusQuerySchema>;
+
+export const dateRangeQuerySchema = z.object({ fromDate: z.iso.date(), toDate: z.iso.date() });
+export type DateRangeDto = z.infer<typeof dateRangeQuerySchema>;
+
+export const staffListingQuerySchema = z.object({ includeDeleted: z.string().optional() });
+export type StaffListingQueryDto = z.infer<typeof staffListingQuerySchema>;
+
+export const locationsCursorQuerySchema = z.object({ cursor: z.coerce.number().int().min(0).default(0) });
+export type LocationsCursorQueryDto = z.infer<typeof locationsCursorQuerySchema>;
