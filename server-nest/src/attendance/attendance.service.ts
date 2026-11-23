@@ -15,6 +15,7 @@ import type {
   CorrectionDto,
   DateRangeDto,
   DecisionDto,
+  ExportDto,
   ManagerAttendanceListQueryDto,
   ManagerAttendanceSummaryQueryDto,
 } from './attendance.schemas.js';
@@ -23,7 +24,7 @@ const SHOP_CODE_PATTERN = /^00\d{2}$/;
 const WORKER_CODE_PATTERN = /^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/;
 
 /** Shape of a repeated or comma-joined query param (`?x=a&x=b` or `?x=a,b`) before `selectedCodes` parses it. */
-type CodeQueryValue = string | string[] | undefined;
+type CodeQueryValue = string | string[] | null | undefined;
 
 /** Express's query parser only ever produces string, string[], or undefined for a query param. */
 function asCodeQueryValue(value: unknown): CodeQueryValue {
@@ -109,6 +110,7 @@ interface StaffListingRow {
 interface AttendanceListingRow extends AttendanceHoursRecord {
   worker_id: string;
   shop_id: string;
+  version: number;
   worker_name: string;
   worker_code: string | null;
   shop_name: string;
@@ -229,6 +231,27 @@ interface IssueQueueRow {
 interface PersonApprovalRow {
   account_id: string;
   item_type: string;
+}
+
+interface AccountEmailNameRow {
+  email: string | null;
+  name: string;
+}
+
+interface ExportJobRow {
+  id: string;
+}
+
+interface RecordWorkerIdRow {
+  worker_id: string;
+}
+
+interface PersonalSegmentRow {
+  status: string;
+  issue_code: string | null;
+  hrs: string | null;
+  start_at: Date | null;
+  end_at: Date | null;
 }
 
 interface LocationPosition {
@@ -921,6 +944,117 @@ export class AttendanceService {
       ORDER BY created_at`;
   }
 
+  /** Mirrors legacy's shared `POST /attendance/exports` + `/manager/staff-attendance/exports` handler. */
+  async exportRecords(account: Account, staffMode: boolean, dto: ExportDto): Promise<Record<string, unknown>> {
+    if (!PERSONAL_ROLES.includes(account.role as Role)) throw apiError(403, 'Personal employee account required');
+    this.checkRangeWithinAMonth({ fromDate: dto.fromDate, toDate: dto.toDate });
+
+    const shopCodes = dto.shopIds ?? dto.shopId;
+    const workerCodes = dto.workerIds ?? dto.workerId;
+
+    if (staffMode) {
+      const scope = await this.staffAttendanceScope(this.db, account, shopCodes, workerCodes);
+      const ids = new Set(scope.workerIds);
+      const existing = await this.queryWorkerIdsForRecords(this.db, dto.records.map((r) => r.id));
+      if (existing.some((r) => !ids.has(r.worker_id))) throw apiError(403, 'Staff outside your managed groomers');
+    }
+
+    return this.db.$transaction((tx) =>
+      this.idempotency.run(tx, account.id, dto.operationId, staffMode ? 'STAFF_ATTENDANCE_EMAIL_EXPORT' : 'ATTENDANCE_EMAIL_EXPORT', dto, async () => {
+        const scope = staffMode
+          ? await this.staffAttendanceScope(tx, account, shopCodes, workerCodes)
+          : await this.personalAttendanceScope(tx, account, shopCodes, workerCodes);
+
+        const accountRow = await this.queryAccountEmailName(tx, account.id);
+        if (!accountRow?.email) throw apiError(422, 'Registered email required');
+
+        const result = await this.queryExportRecords(tx, scope.workerIds, scope.shopIds, dto.fromDate, dto.toDate, dto.records.map((r) => r.id));
+
+        const versions = new Map(dto.records.map((r) => [r.id, r.version]));
+        if (versions.size !== dto.records.length || result.length !== versions.size || result.some((r) => versions.get(r.id) !== r.version)) {
+          throw apiError(409, 'Records changed; query again before exporting');
+        }
+
+        const period = dto.fromDate === dto.toDate ? dto.fromDate : `${dto.fromDate} - ${dto.toDate}`;
+        const subject = `Pawhub ${scope.s?.name ?? 'All stores'} ${period} attendence record`.replace(/[\r\n]/g, ' ');
+        const snapshot = {
+          shopId: dto.shopId ?? (dto.shopIds?.length === 1 ? dto.shopIds[0] : null),
+          shopIds: dto.shopIds ?? [],
+          shopName: scope.s?.name ?? 'All stores',
+          fromDate: dto.fromDate,
+          toDate: dto.toDate,
+          workerName: staffMode ? scope.staffName : accountRow.name,
+          workerCode: staffMode ? scope.staffCode : account.login_code,
+          staffMode,
+          dailyHours: this.attendanceDays(result),
+          records: result,
+        };
+
+        const job = await this.insertExportJob(tx, account.id, accountRow.email as string, subject, snapshot);
+        await this.audit.record(tx, account.id, 'ATTENDANCE_EMAIL_EXPORT', job.id);
+
+        return { exportId: job.id, status: 'QUEUED', recipientEmail: accountRow.email };
+      }),
+    );
+  }
+
+  /** Mirrors legacy's `GET /attendance/summary` — a personal work_segments summary. */
+  async personalSummary(account: Account, shopCode: string | undefined, workerCode: string | undefined, range: DateRangeDto): Promise<Record<string, unknown>> {
+    const { worker, shop } = await this.resolveAppScope(this.db, account, shopCode, workerCode || account.login_code);
+    const segments = await this.queryPersonalSegments(this.db, worker.id, shop!.id, range.fromDate, range.toDate);
+
+    return { segments };
+  }
+
+  private async queryWorkerIdsForRecords(c: Queryable, recordIds: string[]): Promise<RecordWorkerIdRow[]> {
+    return c.$queryRaw<RecordWorkerIdRow[]>`SELECT worker_id FROM attendance_records WHERE id=ANY(${recordIds}::uuid[])`;
+  }
+
+  private async queryAccountEmailName(c: Queryable, accountId: string): Promise<AccountEmailNameRow | undefined> {
+    const [row] = await c.$queryRaw<AccountEmailNameRow[]>`SELECT email,name FROM accounts WHERE id=${accountId}::uuid`;
+    return row;
+  }
+
+  private async queryExportRecords(
+    c: Queryable,
+    workerIds: string[],
+    shopIds: string[] | null,
+    fromDate: string,
+    toDate: string,
+    recordIds: string[],
+  ): Promise<AttendanceListingRow[]> {
+    return c.$queryRaw<AttendanceListingRow[]>`
+      SELECT r.*,wa.name AS worker_name,wa.login_code AS worker_code,sh.name AS shop_name,sa.login_code AS shop_code,
+        (SELECT x.after_type FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING' LIMIT 1) AS pending_sign_type,
+        EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING') AS pending
+      FROM attendance_records r JOIN workers wr ON wr.id=r.worker_id JOIN accounts wa ON wa.id=wr.account_id
+      JOIN shops sh ON sh.id=r.shop_id JOIN accounts sa ON sa.id=sh.account_id
+      WHERE worker_id=ANY(${workerIds}::uuid[]) AND (${shopIds}::uuid[] IS NULL OR r.shop_id=ANY(${shopIds}::uuid[])) AND NOT confirmed_deleted
+        AND (NOT effective_deleted OR EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING'))
+        AND (effective_occurred_at AT TIME ZONE ${ATTENDANCE_ZONE})::date BETWEEN ${fromDate}::date AND ${toDate}::date
+        AND r.id=ANY(${recordIds}::uuid[])
+      ORDER BY effective_occurred_at,id FOR SHARE OF r`;
+  }
+
+  private async insertExportJob(
+    tx: Prisma.TransactionClient,
+    accountId: string,
+    recipientEmail: string,
+    subject: string,
+    snapshot: unknown,
+  ): Promise<ExportJobRow> {
+    const [job] = await tx.$queryRaw<ExportJobRow[]>`
+      INSERT INTO attendance_export_jobs(account_id,recipient_email,subject,snapshot_data)
+      VALUES(${accountId}::uuid,${recipientEmail},${subject},${JSON.stringify(snapshot)}::jsonb) RETURNING id`;
+    return job!;
+  }
+
+  private async queryPersonalSegments(c: Queryable, workerId: string, shopId: string, fromDate: string, toDate: string): Promise<PersonalSegmentRow[]> {
+    return c.$queryRaw<PersonalSegmentRow[]>`
+      SELECT status,issue_code,hrs,start_at,end_at FROM work_segments
+      WHERE worker_id=${workerId}::uuid AND shop_id=${shopId}::uuid AND (start_at AT TIME ZONE ${ATTENDANCE_ZONE})::date BETWEEN ${fromDate}::date AND ${toDate}::date`;
+  }
+
   /** Mirrors legacy's `staffAttendanceScope()` — the set of workers/shops a manager's staff view resolves to. */
   async staffAttendanceScope(
     c: Queryable,
@@ -1012,7 +1146,7 @@ export class AttendanceService {
   }
 
   /** Mirrors legacy's `selectedCodes()` — parses a comma-joined or repeated query value into a deduped, pattern-validated code list. */
-  private selectedCodes(value: string | string[] | undefined, pattern: RegExp): string[] {
+  private selectedCodes(value: CodeQueryValue, pattern: RegExp): string[] {
     if (value == null || value === '') return [];
 
     const list = Array.isArray(value) ? value : value.split(',');

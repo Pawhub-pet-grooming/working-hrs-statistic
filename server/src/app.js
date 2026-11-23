@@ -1,6 +1,5 @@
 import { mountAndroidDownload } from "./android-download.js";
 import { mountStoreDownload } from "./store-download.js";
-import { dailyAttendanceHours, totalAttendanceHours } from "./attendance-hours.js";
 import express from "express";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -124,10 +123,6 @@ async function allowed(c, a, shopId) {
       [shopId, a.id],
     )
   ).rowCount;
-}
-async function assertShop(c, a, id) {
-  if (!(await allowed(c, a, id)))
-    fail(403, "Shop outside your scope", "SHOP_FORBIDDEN");
 }
 async function idem(c, a, b, type, fn) {
   const digest = hash(JSON.stringify({ type, body: b }));
@@ -297,8 +292,8 @@ async function summary(req, c = pool) {
 // (Epic 3). assertRecordScope()/rebuild() stay — reports/pdf, the photos route, and index.js's
 // maintenance loop still call them.
 // POST /attendance (clock in/out) and GET /attendance/status migrated to server-nest's
-// AttendanceController (Epic 3). appScope()/dailyAttendanceCount()/rebuild() stay — the
-// not-yet-migrated staff/personal listing, export, and adjustment routes below still use them.
+// AttendanceController (Epic 3). appScope()/rebuild() stay — the not-yet-migrated personal
+// summary and export routes below still use them.
 app.post("/api/v1/manager/reports/pdf", async (req, res) => {
   const b = z
     .object({
@@ -367,144 +362,13 @@ app.post("/api/v1/manager/reports/pdf", async (req, res) => {
         );
   doc.end();
 });
-async function appScope(req, c, shopCode, workerCode, allowAllShops = false) {
-  if (backend.includes(req.account.role)) await c.query("INSERT INTO workers(account_id,contact,address) VALUES($1,$2,$3) ON CONFLICT(account_id) DO NOTHING", [req.account.id, req.account.profile_phone, req.account.profile_address]);
-  const w = (
-    await c.query(
-      "SELECT w.*,a.login_code,a.status AS account_status FROM workers w JOIN accounts a ON a.id=w.account_id WHERE ($1::text IS NOT NULL AND a.login_code=$1) OR ($1::text IS NULL AND a.id=$2 AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER'))",
-      [workerCode || null, req.account.id],
-    )
-  ).rows[0];
-  const s = (
-    await c.query(
-      "SELECT s.* FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=$1",
-      [shopCode],
-    )
-  ).rows[0];
-  if (w && req.account.role === "SHOP" && w.account_status !== "ACTIVE") fail(404, "Active employee required");
-  if (!w || (!s && !(allowAllShops && !shopCode && req.account.role !== "SHOP"))) fail(422, "Unknown worker or shop");
-  if (["WORKER", ...backend].includes(req.account.role)) {
-    if (w.account_id !== req.account.id) fail(403, "Only your own records");
-  } else if (req.account.role === "SHOP")
-    await assertShop(c, req.account, s.id);
-  else fail(403, "App account required");
-  return { w, s };
-}
-async function dailyAttendanceCount(c, workerId, shopId, day) {
-  return Number((await c.query(
-    "SELECT count(*)::int AS count FROM attendance_records WHERE worker_id=$1 AND shop_id=$2 AND NOT effective_deleted AND (effective_occurred_at AT TIME ZONE $3)::date=$4::date",
-    [workerId, shopId, zone, day],
-  )).rows[0].count);
-}
-function selectedCodes(value, pattern) {
-  if (value == null || value === "") return [];
-  const list = Array.isArray(value) ? value : String(value).split(",");
-  return [...new Set(z.array(z.string().regex(pattern)).max(200).parse(list))];
-}
-async function attendanceStores(c, value) {
-  const codes=selectedCodes(value,/^00\d{2}$/);
-  if (!codes.length) return {shopIds:null,s:null};
-  const rows=(await c.query("SELECT s.*,a.login_code FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=ANY($1::text[]) ORDER BY s.name",[codes])).rows;
-  if(rows.length!==codes.length) fail(422,"Unknown store");
-  return {shopIds:rows.map(r=>r.id),s:{name:rows.map(r=>r.name).join(", "),id:rows.length===1?rows[0].id:null}};
-}
-async function staffAttendanceScope(c, actor, shopCodes, workerCodes, includeDeleted = true) {
-  await c.query("INSERT INTO workers(account_id,contact,address) VALUES($1,'','') ON CONFLICT(account_id) DO NOTHING",[actor.id]);
-  const codes=selectedCodes(workerCodes,/^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/);
-  const available=(await c.query(`SELECT w.id,a.id AS account_id,a.name,a.login_code,a.status FROM workers w JOIN accounts a ON a.id=w.account_id WHERE ($1 IN('GENERAL_MANAGER','SUPER_MANAGER') AND a.role IN('WORKER','MANAGER','GENERAL_MANAGER')) OR (a.role='WORKER' AND EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2 AND mw.worker_id=w.id)) OR a.id=$2 ORDER BY a.name`,[actor.role,actor.id])).rows;
-  const chosenShops=selectedCodes(shopCodes,/^00\d{2}$/);
-  if(actor.role==='MANAGER' && codes.length && chosenShops.length===1){
-    const permitted=(await c.query("SELECT 1 FROM account_shops x JOIN shops s ON s.id=x.shop_id JOIN accounts a ON a.id=s.account_id WHERE x.account_id=$1 AND a.login_code=$2",[actor.id,chosenShops[0]])).rowCount;
-    if(permitted){
-      const additional=(await c.query("SELECT w.id,a.id AS account_id,a.name,a.login_code FROM workers w JOIN accounts a ON a.id=w.account_id WHERE a.role='WORKER' AND (a.login_code=ANY($1::text[]) OR '__worker__'||w.id::text=ANY($1::text[]))",[codes])).rows;
-      for(const row of additional)if(!available.some(r=>r.id===row.id))available.push(row);
-    }
-  }
-  if(codes.some(code=>!available.some(r=>r.login_code===code || code==='__worker__'+r.id || (code==='__self__'&&r.account_id===actor.id)))) fail(403,"Staff outside your managed groomers");
-  const staff=codes.length?available.filter(r=>codes.includes(r.login_code)||codes.includes('__worker__'+r.id)||(codes.includes('__self__')&&r.account_id===actor.id)):available.filter(r=>includeDeleted || r.status==='ACTIVE');
-  return {...await attendanceStores(c,shopCodes),workerIds:staff.map(r=>r.id),staffName:codes.length?staff.map(r=>r.name).join(", "):"All accessible staff",staffCode:staff.length===1?staff[0].login_code:null};
-}
-async function personalAttendanceScope(c,req,shopCodes,workerCodes) {
-  const codes=selectedCodes(workerCodes,/^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/);
-  if(codes.length>1) fail(403,"Only your own records");
-  const shops=selectedCodes(shopCodes,/^00\d{2}$/);
-  const {w}=await appScope(req,c,req.account.role==='SHOP'?shops[0]:null,codes[0]||req.account.login_code,true);
-  const scope=await attendanceStores(c,shops);
-  if(req.account.role==='SHOP') for(const id of scope.shopIds||[]) await assertShop(c,req.account,id);
-  return {...scope,workerIds:[w.id]};
-}
 // GET /manager/staff-attendance/staff, GET /manager/attendance/locations, and the shared
 // GET /attendance + /manager/staff-attendance listing migrated to server-nest's
 // StaffAttendanceController/ManagerAttendanceController/AttendanceController (Epic 3).
-// attendanceDays()/staffAttendanceScope()/personalAttendanceScope()/attendanceStores() stay —
-// the not-yet-migrated export routes below still use them.
-function attendanceDays(records, staffMode) {
-  const groups = new Map();
-  for (const r of records) {
-    const key=r.worker_id+":"+r.shop_id;
-    if(!groups.has(key)) groups.set(key,[]);
-    groups.get(key).push(r);
-  }
-  return [...groups.values()].flatMap(rows=>dailyAttendanceHours(rows).map(day=>({...day,workerId:rows[0].worker_id,workerCode:rows[0].worker_code || "__worker__"+rows[0].worker_id,workerName:rows[0].worker_name,shopId:rows[0].shop_id,shopCode:rows[0].shop_code,shopName:rows[0].shop_name}))).sort((a,b)=>a.date.localeCompare(b.date)||a.workerName.localeCompare(b.workerName)||a.shopName.localeCompare(b.shopName));
-}
-app.post(["/api/v1/attendance/exports", "/api/v1/manager/staff-attendance/exports"], async (req, res) => {
-  if (!["WORKER", ...backend].includes(req.account.role)) fail(403, "Personal employee account required");
-  const b = z.object({ operationId: uuid, shopId: z.string().regex(/^00\d{2}$/).nullable().optional(),
-    workerId: z.union([z.string().regex(/^[1-9]\d{3}$/),z.literal("__self__")]).nullable().optional(),
-    shopIds: z.array(z.string().regex(/^00\d{2}$/)).max(200).optional(),
-    workerIds: z.array(z.string().regex(/^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/)).max(200).optional(),
-    fromDate: z.iso.date(), toDate: z.iso.date(),
-    records: z.array(z.object({ id: uuid, version: z.number().int().positive() })).min(1).max(2000),
-  }).strict().parse(req.body);
-  if (b.fromDate > b.toDate || new Date(b.toDate) - new Date(b.fromDate) > 30 * 86400000)
-    fail(422, "Date range must be within 31 days");
-  if (req.path.startsWith("/api/v1/manager/")) {
-    const scope = await staffAttendanceScope(pool,req.account,b.shopIds ?? b.shopId,b.workerIds ?? b.workerId);
-    const ids = new Set(scope.workerIds);
-    const existing = (await pool.query("SELECT worker_id FROM attendance_records WHERE id=ANY($1::uuid[])",[b.records.map(r=>r.id)])).rows;
-    if (existing.some(r=>!ids.has(r.worker_id))) fail(403,"Staff outside your managed groomers");
-  }
-  const data = await transaction(c => idem(c, req.account, b, req.path.startsWith("/api/v1/manager/") ? "STAFF_ATTENDANCE_EMAIL_EXPORT" : "ATTENDANCE_EMAIL_EXPORT", async () => {
-    const staffMode = req.path.startsWith("/api/v1/manager/");
-    let scope;
-    if (staffMode) scope=await staffAttendanceScope(c,req.account,b.shopIds ?? b.shopId,b.workerIds ?? b.workerId);
-    else scope=await personalAttendanceScope(c,req,b.shopIds ?? b.shopId,b.workerIds ?? b.workerId);
-    const s=scope.s;
-    const account = (await c.query("SELECT email,name FROM accounts WHERE id=$1", [req.account.id])).rows[0];
-    if (!account.email) fail(422, "Registered email required");
-    const result = await c.query("SELECT r.*,wa.name AS worker_name,wa.login_code AS worker_code,sh.name AS shop_name,sa.login_code AS shop_code,(SELECT x.after_type FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING' LIMIT 1) AS pending_sign_type,EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING') AS pending FROM attendance_records r JOIN workers wr ON wr.id=r.worker_id JOIN accounts wa ON wa.id=wr.account_id JOIN shops sh ON sh.id=r.shop_id JOIN accounts sa ON sa.id=sh.account_id WHERE worker_id=ANY($1::uuid[]) AND ($2::uuid[] IS NULL OR r.shop_id=ANY($2::uuid[])) AND NOT confirmed_deleted AND (NOT effective_deleted OR EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING')) AND (effective_occurred_at AT TIME ZONE $3)::date BETWEEN $4::date AND $5::date AND r.id=ANY($6::uuid[]) ORDER BY effective_occurred_at,id FOR SHARE OF r",
-      [scope.workerIds, scope.shopIds, zone, b.fromDate, b.toDate, b.records.map(r => r.id)]);
-    const versions = new Map(b.records.map(r => [r.id, r.version]));
-    if (versions.size !== b.records.length || result.rows.length !== versions.size ||
-        result.rows.some(r => versions.get(r.id) !== r.version))
-      fail(409, "Records changed; query again before exporting");
-    const period = b.fromDate === b.toDate ? b.fromDate : `${b.fromDate} - ${b.toDate}`;
-    const subject = `Pawhub ${s?.name || "All stores"} ${period} attendence record`.replace(/[\r\n]/g, " ");
-    const snapshot = { shopId: b.shopId || (b.shopIds?.length===1?b.shopIds[0]:null), shopIds:b.shopIds || [], shopName: s?.name || "All stores", fromDate: b.fromDate, toDate: b.toDate,
-      workerName: staffMode ? scope.staffName : account.name, workerCode: staffMode ? scope.staffCode : req.account.login_code, staffMode, dailyHours:attendanceDays(result.rows,staffMode), records: result.rows };
-    const job = (await c.query("INSERT INTO attendance_export_jobs(account_id,recipient_email,subject,snapshot_data) VALUES($1,$2,$3,$4) RETURNING id",
-      [req.account.id, account.email, subject, snapshot])).rows[0];
-    await audit(c, req.account, "ATTENDANCE_EMAIL_EXPORT", job.id);
-    return { exportId: job.id, status: "QUEUED", recipientEmail: account.email };
-  }));
-  res.status(202).json({ data });
-});
-app.get("/api/v1/attendance/summary", async (req, res) => {
-  const { w, s } = await appScope(
-    req,
-    pool,
-    req.query.shopId,
-    req.query.workerId || req.account.login_code,
-  );
-  const range = z
-    .object({ fromDate: z.iso.date(), toDate: z.iso.date() })
-    .parse(req.query);
-  const r = await pool.query(
-    "SELECT status,issue_code,hrs,start_at,end_at FROM work_segments WHERE worker_id=$1 AND shop_id=$2 AND (start_at AT TIME ZONE $3)::date BETWEEN $4::date AND $5::date",
-    [w.id, s.id, zone, range.fromDate, range.toDate],
-  );
-  res.json({ data: { segments: r.rows } });
-});
+// POST /attendance/exports + /manager/staff-attendance/exports and GET /attendance/summary
+// migrated to server-nest's AttendanceController/StaffAttendanceController (Epic 3). This was
+// the last caller of appScope()/selectedCodes()/attendanceStores()/staffAttendanceScope()/
+// personalAttendanceScope()/attendanceDays() — all deleted below as dead code.
 // POST /attendance-adjustments, /manager/attendance-adjustments migrated to server-nest's
 // AttendanceAdjustmentsController/ManagerAttendanceAdjustmentsController (Epic 3).
 app.post("/api/v1/photos", upload.single("file"), async (req, res) => {

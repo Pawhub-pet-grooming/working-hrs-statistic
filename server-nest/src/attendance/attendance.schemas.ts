@@ -85,3 +85,33 @@ export const decisionSchema = z.object({
   expectedRecordVersion: z.number().int().positive(),
 });
 export type DecisionDto = z.infer<typeof decisionSchema>;
+
+export const exportSchema = z
+  .object({
+    operationId: uuid,
+    shopId: z
+      .string()
+      .regex(/^00\d{2}$/)
+      .nullable()
+      .optional(),
+    workerId: z
+      .union([z.string().regex(/^[1-9]\d{3}$/), z.literal('__self__')])
+      .nullable()
+      .optional(),
+    shopIds: z
+      .array(z.string().regex(/^00\d{2}$/))
+      .max(200)
+      .optional(),
+    workerIds: z
+      .array(z.string().regex(/^(?:[1-9]\d{3}|__self__|__worker__[a-f0-9-]{36})$/))
+      .max(200)
+      .optional(),
+    fromDate: z.iso.date(),
+    toDate: z.iso.date(),
+    records: z
+      .array(z.object({ id: uuid, version: z.number().int().positive() }))
+      .min(1)
+      .max(2000),
+  })
+  .strict();
+export type ExportDto = z.infer<typeof exportSchema>;
