@@ -1,4 +1,4 @@
-export function mountOrganization(app, { z, uuid, pool, transaction, idem, fail, audit, encrypt, randomInt, geocodeAddress, assertShop }) {
+export function mountOrganization(app, { z, uuid, pool, transaction, idem, fail, audit, encrypt, randomInt }) {
   const admin = req => { if (!["SUPER_MANAGER", "GENERAL_MANAGER"].includes(req.account.role)) fail(403, "Company administrator required"); };
   async function revision(c, expected) {
     const row = (await c.query("SELECT version FROM organization_state WHERE id=true FOR UPDATE")).rows[0];
@@ -81,21 +81,5 @@ export function mountOrganization(app, { z, uuid, pool, transaction, idem, fail,
     }));
     res.json({ data });
   });
-  app.post("/api/v1/manager/shops/:id/profile", async (req, res) => {
-    const id = uuid.parse(req.params.id);
-    const b = z.object({ operationId: uuid, expectedVersion: z.number().int().positive(), name: z.string().trim().min(1).max(200), address: z.string().trim().min(1).max(500) }).strict().parse(req.body);
-    await assertShop(pool, req.account, id);
-    const data = await transaction(c => idem(c, req.account, { ...b, id }, "SHOP_PROFILE", async () => {
-      await assertShop(c, req.account, id);
-      const shop = (await c.query("SELECT * FROM shops WHERE id=$1 FOR UPDATE", [id])).rows[0];
-      if (!shop) fail(404, "Store not found");
-      if (shop.profile_version !== b.expectedVersion) fail(409, "Store changed; reload");
-      const coordinates = b.address === shop.address ? { latitude: shop.latitude, longitude: shop.longitude } : await geocodeAddress(b.address);
-      await c.query("UPDATE shops SET name=$2,address=$3,latitude=$4,longitude=$5,profile_version=profile_version+1 WHERE id=$1", [id, b.name, b.address, coordinates.latitude, coordinates.longitude]);
-      await c.query("UPDATE accounts SET name=$2 WHERE id=$1", [shop.account_id, b.name]);
-      await audit(c, req.account, "SHOP_PROFILE_CHANGED", id, { name: shop.name, address: shop.address }, b);
-      return { id, version: shop.profile_version + 1 };
-    }));
-    res.json({ data });
-  });
+  // /manager/shops/:id/profile migrated to server-nest's ManagerShopsController (Epic 3).
 }

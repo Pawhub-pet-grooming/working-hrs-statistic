@@ -1,4 +1,3 @@
-import { SHOP_LOGIN_PASSWORD } from "./shop-password.js";
 import { mountAndroidDownload } from "./android-download.js";
 import { mountStoreDownload } from "./store-download.js";
 import { attendanceLocation } from "./attendance-location.js";
@@ -19,7 +18,6 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import cors from "cors";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import argon2 from "argon2";
 import {
   randomBytes,
   createHash,
@@ -31,7 +29,6 @@ import { z } from "zod";
 import { DateTime } from "luxon";
 import PDFDocument from "pdfkit";
 import { pool, transaction } from "./db.js";
-import { geocodeAddress } from "./geocode.js";
 import { monthBounds, localDate, zone } from "./domain.js";
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -189,65 +186,9 @@ async function assertRecordScope(c, actor, shopId, workerId) {
 }
 const scopeSql =
   "($1 IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=$2))";
-app.get(["/api/v1/shops", "/api/v1/manager/shops"], async (req, res) => {
-  let r;
-  if (req.account.role === "SHOP")
-    r = await pool.query(
-      'SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id WHERE s.account_id=$1',
-      [req.account.id],
-    );
-  else if (req.account.role === "WORKER" || (req.path === "/api/v1/shops" && backend.includes(req.account.role)))
-    r = await pool.query(
-      'SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id',
-    );
-  else
-    r = await pool.query(
-      'SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id WHERE ' +
-        scopeSql,
-      [req.account.role, req.account.id],
-    );
-  res.json({ data: r.rows });
-});
-app.post("/api/v1/manager/shops", async (req, res) => {
-  if (!companyAdmin(req.account)) fail(403, "Company administrator required");
-  const b = z
-    .object({
-      operationId: uuid,
-      shopId: z
-        .string()
-        .regex(/^00\d{2}$/)
-        .refine((x) => x !== "0000"),
-      name: z.string().trim().min(1),
-      address: z.string().trim().min(1).max(500),
-      latitude: z.number().min(-90).max(90).optional(),
-      longitude: z.number().min(-180).max(180).optional(),
-    })
-    .parse(req.body);
-  const pw = await argon2.hash(SHOP_LOGIN_PASSWORD);
-  const safe = b;
-  const data = await transaction((c) =>
-    idem(c, req.account, safe, "SHOP_CREATE", async () => {
-      const coordinates = b.latitude !== undefined && b.longitude !== undefined
-        ? { latitude: b.latitude, longitude: b.longitude }
-        : await geocodeAddress(b.address);
-      const a = (
-        await c.query(
-          "INSERT INTO accounts(role,login_code,name,password_hash,status) VALUES('SHOP',$1,$2,$3,'ACTIVE') RETURNING id",
-          [b.shopId, b.name, pw],
-        )
-      ).rows[0];
-      const s = (
-        await c.query(
-          "INSERT INTO shops(account_id,name,address,latitude,longitude) VALUES($1,$2,$3,$4,$5) RETURNING *",
-          [a.id, b.name, b.address, coordinates.latitude, coordinates.longitude],
-        )
-      ).rows[0];
-      await audit(c, req.account, "SHOP_CREATE", s.id);
-      return s;
-    }),
-  );
-  res.status(201).json({ data });
-});
+// shops listing (/shops, /manager/shops), shop creation (POST /manager/shops) and shop profile
+// edit (POST /manager/shops/:id/profile, in organization.js) migrated to server-nest's
+// ShopsController/ManagerShopsController (Epic 3).
 app.get("/api/v1/manager/attendance/stores", async (req, res) => {
   const result = await pool.query(`SELECT s.id,s.name,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id WHERE $1 IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.account_id=$2 AND ac.shop_id=s.id) OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.manager_account_id=$2) ORDER BY s.name`, [req.account.role, req.account.id]);
   res.json({ data: result.rows });
@@ -1359,7 +1300,7 @@ app.get("/api/v1/photos/:id", async (req, res) => {
   });
 });
 
-mountOrganization(app, { z, uuid, pool, transaction, idem, fail, audit, encrypt, randomInt, geocodeAddress, assertShop });
+mountOrganization(app, { z, uuid, pool, transaction, idem, fail, audit, encrypt, randomInt });
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   const status =
