@@ -9,13 +9,18 @@ type Queryable = DbService | Prisma.TransactionClient;
 const COMPANY_ADMIN_ROLES = ['GENERAL_MANAGER', 'SUPER_MANAGER'];
 
 /**
- * Mirrors legacy's `allowed`/`assertShop` shop-scope checks (server/src/app.js), shared across
- * business-domain modules (Me, Organization, Attendance, Photos, ...).
+ * Mirrors legacy's `allowed`/`assertShop`/`assertWorker` scope checks (server/src/app.js), shared
+ * across business-domain modules (Me, Organization, Attendance, Photos, ...).
  */
 @Injectable()
 export class ScopeService {
+  /** Mirrors legacy's `companyAdmin()`. */
+  isCompanyAdmin(account: Account): boolean {
+    return COMPANY_ADMIN_ROLES.includes(account.role);
+  }
+
   async allowed(c: Queryable, account: Account, shopId: string): Promise<boolean> {
-    if (COMPANY_ADMIN_ROLES.includes(account.role)) return true;
+    if (this.isCompanyAdmin(account)) return true;
     if (account.role === 'SHOP') {
       return (await c.shops.count({ where: { id: shopId, account_id: account.id } })) > 0;
     }
@@ -24,5 +29,11 @@ export class ScopeService {
 
   async assertShop(c: Queryable, account: Account, shopId: string): Promise<void> {
     if (!(await this.allowed(c, account, shopId))) throw apiError(403, 'Shop outside your scope', 'SHOP_FORBIDDEN');
+  }
+
+  async assertWorker(c: Queryable, account: Account, workerId: string): Promise<void> {
+    if (this.isCompanyAdmin(account)) return;
+    const count = await c.manager_workers.count({ where: { manager_account_id: account.id, worker_id: workerId } });
+    if (!count) throw apiError(403, 'Groomer outside your scope', 'WORKER_FORBIDDEN');
   }
 }

@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '../generated/prisma/client.js';
+import { PrismaClient, type Prisma } from '../generated/prisma/client.js';
 import type { Env } from '../config/env.schema.js';
 
 @Injectable()
@@ -23,3 +23,6 @@ export class DbService extends PrismaClient implements OnModuleInit, OnModuleDes
     this.logger.log('Disconnected from the database');
   }
 }
+
+/** Accepted by helpers that run either outside a transaction (DbService) or inside one. */
+export type Queryable = DbService | Prisma.TransactionClient;

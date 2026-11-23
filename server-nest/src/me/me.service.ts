@@ -1,14 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { BACKEND_ROLES, type Account, type Role } from '../auth/types.js';
+import { accountInfo, profileInfo } from '../common/account-info.util.js';
 import { apiError } from '../common/api-error.js';
-import { DbService } from '../database/db.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { DbService, type Queryable } from '../database/db.service.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { ScopeService } from '../organization/scope.service.js';
 import type { PreferencesDto, ProfileDto } from './me.schemas.js';
-
-type Queryable = DbService | Prisma.TransactionClient;
 
 /** Accounts that manage their own preferred shop directly, bypassing the SHOP-role scope check. */
 const PERSONAL_ROLES: Role[] = ['WORKER', ...BACKEND_ROLES];
@@ -24,7 +22,7 @@ export class MeService {
   ) {}
 
   async info(account: Account): Promise<Record<string, unknown>> {
-    return this.accountInfo(account, this.db);
+    return accountInfo(account, this.db);
   }
 
   async stores(account: Account): Promise<unknown[]> {
@@ -35,7 +33,7 @@ export class MeService {
   }
 
   async profile(account: Account): Promise<Record<string, unknown>> {
-    return this.profileInfo(account, this.db);
+    return profileInfo(account, this.db);
   }
 
   async updatePreferences(account: Account, dto: PreferencesDto): Promise<Record<string, unknown>> {
@@ -97,7 +95,7 @@ export class MeService {
             preferredShopId: preferred?.id ?? null,
           },
         );
-        return this.profileInfo(updated!, tx);
+        return profileInfo(updated!, tx);
       }),
     );
   }
@@ -107,35 +105,5 @@ export class MeService {
       { id: string }[]
     >`SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${loginCode}`;
     return shop ?? null;
-  }
-
-  private async accountInfo(account: Account, c: Queryable): Promise<Record<string, unknown>> {
-    let preferredLoginCode: string | null = null;
-    if (account.preferred_shop_id) {
-      const [row] = await c.$queryRaw<
-        { login_code: string | null }[]
-      >`SELECT sa.login_code FROM shops s JOIN accounts sa ON sa.id=s.account_id WHERE s.id=${account.preferred_shop_id}`;
-      preferredLoginCode = row?.login_code ?? null;
-    }
-    return {
-      id: account.id,
-      accountId: account.login_code || null,
-      role: account.role,
-      name: account.name,
-      attendanceEnabled: account.status === 'ACTIVE',
-      preferredShopId: preferredLoginCode,
-    };
-  }
-
-  private async profileInfo(account: Account, c: Queryable): Promise<Record<string, unknown>> {
-    return {
-      ...(await this.accountInfo(account, c)),
-      email: account.email || '',
-      firstName: account.first_name || account.name,
-      lastName: account.last_name || '',
-      address: account.profile_address,
-      phone: account.profile_phone,
-      version: account.profile_version,
-    };
   }
 }

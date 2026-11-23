@@ -8,13 +8,19 @@ describe('ScopeService', () => {
   let service: ScopeService;
   const shopsCount = vi.fn();
   const accountShopsCount = vi.fn();
-  const c = { shops: { count: shopsCount }, account_shops: { count: accountShopsCount } } as unknown as DbService;
+  const managerWorkersCount = vi.fn();
+  const c = {
+    shops: { count: shopsCount },
+    account_shops: { count: accountShopsCount },
+    manager_workers: { count: managerWorkersCount },
+  } as unknown as DbService;
 
   const account = (role: Account['role']): Account => ({ id: 'account-1', role }) as Account;
 
   beforeEach(async () => {
     shopsCount.mockReset();
     accountShopsCount.mockReset();
+    managerWorkersCount.mockReset();
     const module: TestingModule = await Test.createTestingModule({ providers: [ScopeService] }).compile();
     service = module.get(ScopeService);
   });
@@ -49,5 +55,29 @@ describe('ScopeService', () => {
   it('assertShop resolves without throwing when the account is in scope', async () => {
     accountShopsCount.mockResolvedValue(1);
     await expect(service.assertShop(c, account('MANAGER'), 'shop-1')).resolves.toBeUndefined();
+  });
+
+  it('isCompanyAdmin is true only for GENERAL_MANAGER/SUPER_MANAGER', () => {
+    expect(service.isCompanyAdmin(account('GENERAL_MANAGER'))).toBe(true);
+    expect(service.isCompanyAdmin(account('SUPER_MANAGER'))).toBe(true);
+    expect(service.isCompanyAdmin(account('MANAGER'))).toBe(false);
+    expect(service.isCompanyAdmin(account('WORKER'))).toBe(false);
+  });
+
+  it('assertWorker allows company admins without a lookup', async () => {
+    await expect(service.assertWorker(c, account('SUPER_MANAGER'), 'worker-1')).resolves.toBeUndefined();
+    expect(managerWorkersCount).not.toHaveBeenCalled();
+  });
+
+  it('assertWorker throws WORKER_FORBIDDEN when the manager does not manage that worker', async () => {
+    managerWorkersCount.mockResolvedValue(0);
+    const promise = service.assertWorker(c, account('MANAGER'), 'worker-1');
+    await expect(promise).rejects.toMatchObject({ response: { error: { code: 'WORKER_FORBIDDEN' } } });
+    expect(managerWorkersCount).toHaveBeenCalledWith({ where: { manager_account_id: 'account-1', worker_id: 'worker-1' } });
+  });
+
+  it('assertWorker resolves when the manager manages that worker', async () => {
+    managerWorkersCount.mockResolvedValue(1);
+    await expect(service.assertWorker(c, account('MANAGER'), 'worker-1')).resolves.toBeUndefined();
   });
 });

@@ -176,7 +176,8 @@ export class AuthService {
     });
   }
 
-  private async invite(tx: Prisma.TransactionClient, account: Account, purpose: 'FIRST_SETUP' | 'PASSWORD_RESET'): Promise<string> {
+  /** Also used by OrganizationModule's account-creation/invitation-resend routes. */
+  async invite(tx: Prisma.TransactionClient, account: Account, purpose: 'FIRST_SETUP' | 'PASSWORD_RESET'): Promise<string> {
     const t = newToken();
     await tx.password_links.updateMany({
       where: { account_id: account.id, used_at: null, revoked_at: null },
