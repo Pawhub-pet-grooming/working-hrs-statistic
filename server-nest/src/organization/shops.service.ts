@@ -22,6 +22,13 @@ interface ShopRow {
   shopId: string;
 }
 
+interface EmployeeLookupRow {
+  workerId: string;
+  name: string;
+  requires_manager_approval: boolean;
+  approved_at: Date | null;
+}
+
 /** Mirrors legacy's shops listing/creation/profile routes (server/src/app.js, server/src/organization.js). */
 @Injectable()
 export class ShopsService {
@@ -62,6 +69,22 @@ export class ShopsService {
       SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id
       WHERE ${role} IN('SUPER_MANAGER','GENERAL_MANAGER')
          OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=${accountId}::uuid)`;
+  }
+
+  /** Mirrors legacy's `GET /shops/:shopId/employees/:workerId` — a SHOP account looking up one of its employees before clocking them in. */
+  async lookupEmployee(account: Account, shopLoginCode: string, workerLoginCode: string): Promise<Record<string, unknown>> {
+    const shop = await this.shopIdByLoginCode(shopLoginCode);
+    if (!shop) throw apiError(404, 'Shop not found');
+
+    await this.scope.assertShop(this.db, account, shop.id);
+
+    const worker = await this.queryActiveEmployeeByLoginCode(workerLoginCode);
+    if (!worker) throw apiError(404, 'Employee not found', 'EMPLOYEE_NOT_FOUND');
+    if (worker.requires_manager_approval && !worker.approved_at) {
+      throw apiError(403, 'Manager approval required', 'MANAGER_APPROVAL_REQUIRED');
+    }
+
+    return { shopId: shopLoginCode, workerId: worker.workerId, name: worker.name };
   }
 
   async create(account: Account, dto: CreateShopDto): Promise<ShopRow> {
@@ -138,6 +161,23 @@ export class ShopsService {
     return tx.$queryRaw<ShopRow[]>`
       INSERT INTO shops(account_id,name,address,latitude,longitude) VALUES(${accountId}::uuid,${name},${address},${coordinates.latitude},${coordinates.longitude})
       RETURNING *`;
+  }
+
+  private async shopIdByLoginCode(loginCode: string): Promise<{ id: string } | null> {
+    const [shop] = await this.queryShopIdByLoginCode(loginCode);
+    return shop ?? null;
+  }
+
+  private async queryShopIdByLoginCode(loginCode: string): Promise<{ id: string }[]> {
+    return this.db.$queryRaw<{ id: string }[]>`SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${loginCode}`;
+  }
+
+  private async queryActiveEmployeeByLoginCode(loginCode: string): Promise<EmployeeLookupRow | undefined> {
+    const [worker] = await this.db.$queryRaw<EmployeeLookupRow[]>`
+      SELECT a.login_code AS "workerId",a.name,a.requires_manager_approval,a.approved_at
+      FROM workers w JOIN accounts a ON a.id=w.account_id
+      WHERE a.login_code=${loginCode} AND a.role IN('WORKER','MANAGER') AND a.status='ACTIVE'`;
+    return worker;
   }
 
   private async queryShopForUpdate(tx: Queryable, id: string): Promise<ShopRow[]> {

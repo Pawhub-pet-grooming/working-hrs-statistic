@@ -7,6 +7,8 @@ const shopLoginCode = z
 
 export const uuidParamSchema = z.string().uuid();
 
+export const fourDigitCodeParamSchema = z.string().regex(/^[0-9]{4}$/);
+
 export const createShopSchema = z.object({
   operationId: z.string().uuid(),
   shopId: shopLoginCode,

@@ -668,25 +668,6 @@ async function dailyAttendanceCount(c, workerId, shopId, day) {
     [workerId, shopId, zone, day],
   )).rows[0].count);
 }
-app.get("/api/v1/shops/:shopId/employees/:workerId", async (req, res) => {
-  if (req.account.role !== "SHOP") fail(403, "Shop account required");
-  const { shopId, workerId } = req.params;
-  if (!/^[0-9]{4}$/.test(shopId) || !/^[0-9]{4}$/.test(workerId))
-    fail(422, "Four-digit shop and employee IDs required");
-  const shop = (await pool.query(
-    "SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=$1",
-    [shopId],
-  )).rows[0];
-  if (!shop) fail(404, "Shop not found");
-  await assertShop(pool, req.account, shop.id);
-  const worker = (await pool.query(
-    "SELECT a.login_code AS \"workerId\",a.name,a.requires_manager_approval,a.approved_at FROM workers w JOIN accounts a ON a.id=w.account_id WHERE a.login_code=$1 AND a.role IN('WORKER','MANAGER') AND a.status='ACTIVE'",
-    [workerId],
-  )).rows[0];
-  if (!worker) fail(404, "Employee not found", "EMPLOYEE_NOT_FOUND");
-  if (worker.requires_manager_approval && !worker.approved_at) fail(403, "Manager approval required", "MANAGER_APPROVAL_REQUIRED");
-  res.json({ data: { shopId, workerId: worker.workerId, name: worker.name } });
-});
 app.get("/api/v1/attendance/status", async (req, res) => {
   const code = req.query.workerId || req.account.login_code;
   const { w, s } = await appScope(req, pool, req.query.shopId, code);
