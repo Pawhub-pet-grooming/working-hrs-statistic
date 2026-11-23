@@ -313,8 +313,8 @@ export class AccountsService {
     return person;
   }
 
-  /** Mirrors legacy's advisory-locked scan for an unused 4-digit employee code (`pg_advisory_xact_lock(820013)`). */
-  private async allocateEmployeeCode(tx: Prisma.TransactionClient): Promise<string> {
+  /** Mirrors legacy's advisory-locked scan for an unused 4-digit employee code (`pg_advisory_xact_lock(820013)`). Public: also used by OrganizationService's role-change route. */
+  async allocateEmployeeCode(tx: Prisma.TransactionClient): Promise<string> {
     await this.lockEmployeeCodeAllocation(tx);
 
     const used = new Set((await this.queryUsedEmployeeCodes(tx)).map((r) => r.login_code));

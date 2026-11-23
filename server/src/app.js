@@ -3,7 +3,6 @@ import { mountStoreDownload } from "./store-download.js";
 import { attendanceLocation } from "./attendance-location.js";
 import { dailyAttendanceHours, totalAttendanceHours } from "./attendance-hours.js";
 import express from "express";
-import { mountOrganization } from "./organization.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { localPhotoPath } from "./photo-storage.js";
@@ -18,13 +17,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import cors from "cors";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import {
-  randomBytes,
-  createHash,
-  createCipheriv,
-  randomInt,
-  randomUUID,
-} from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { DateTime } from "luxon";
 import PDFDocument from "pdfkit";
@@ -197,24 +190,9 @@ app.get("/api/v1/manager/attendance/groomers", async (req, res) => {
   res.json({ data: result.rows });
 });
 // workers/managers directory, account creation, managed-account profile/remove/approve/
-// invitations, and invitations listing migrated to server-nest's ManagerAccountsController
+// invitations, invitations listing, and org-wide permissions/general-manager/role routes
+// (organization.js) migrated to server-nest's ManagerAccountsController/OrganizationController
 // (Epic 3). assertWorker/assertRecordScope stay — attendance/photos routes below still use them.
-// encrypt() stays too — organization.js's general-manager route still needs it (passed into
-// mountOrganization below); randomInt is passed through the same way for its role route.
-function encrypt(data) {
-  const key = Buffer.from(process.env.MAIL_ENCRYPTION_KEY || "", "hex");
-  if (key.length !== 32)
-    fail(503, "Mail encryption key not configured", "MAIL_NOT_CONFIGURED");
-  const iv = randomBytes(12),
-    cipher = createCipheriv("aes-256-gcm", key, iv);
-  const enc = Buffer.concat([
-    cipher.update(JSON.stringify(data)),
-    cipher.final(),
-  ]);
-  return [iv, cipher.getAuthTag(), enc]
-    .map((x) => x.toString("base64"))
-    .join(".");
-}
 export async function rebuild(c, workerId) {
   await c.query("SELECT id FROM workers WHERE id=$1 FOR UPDATE", [workerId]);
   await c.query("DELETE FROM work_segments WHERE worker_id=$1", [workerId]);
@@ -1057,7 +1035,6 @@ app.get("/api/v1/photos/:id", async (req, res) => {
   });
 });
 
-mountOrganization(app, { z, uuid, pool, transaction, idem, fail, audit, encrypt, randomInt });
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   const status =
