@@ -18,6 +18,7 @@ describe('SessionAuthGuard', () => {
 
   beforeEach(async () => {
     findFirst.mockReset();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [SessionAuthGuard, { provide: DbService, useValue: { sessions: { findFirst } } }],
     }).compile();

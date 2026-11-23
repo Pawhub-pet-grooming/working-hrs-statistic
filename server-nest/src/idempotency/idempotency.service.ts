@@ -15,7 +15,9 @@ export class IdempotencyService {
     fn: () => Promise<T>,
   ): Promise<T> {
     const digest = createHash('sha256').update(JSON.stringify({ type, body })).digest('hex');
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${actorAccountId}))`;
+
+    await this.lockActorOperations(tx, actorAccountId);
+
     const existing = await tx.api_operations.findUnique({
       where: { actor_account_id_operation_id: { actor_account_id: actorAccountId, operation_id: operationId } },
     });
@@ -25,11 +27,18 @@ export class IdempotencyService {
       }
       return existing.response_data as T;
     }
+
     const op = await tx.api_operations.create({
       data: { actor_account_id: actorAccountId, operation_id: operationId, request_hash: digest },
     });
+
     const data = await fn();
     await tx.api_operations.update({ where: { id: op.id }, data: { response_data: data as Prisma.InputJsonValue } });
+
     return data;
+  }
+
+  private async lockActorOperations(tx: Prisma.TransactionClient, actorAccountId: string): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${actorAccountId}))`;
   }
 }

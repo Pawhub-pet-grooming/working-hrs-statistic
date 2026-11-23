@@ -43,6 +43,7 @@ export class AuthController {
   async register(@Body({ schema: registerSchema }) dto: RegisterDto): Promise<{ data: unknown }> {
     // Does not reveal whether this address already belongs to an account.
     await this.auth.register(dto);
+
     return { data: { accepted: true } };
   }
 
@@ -53,6 +54,7 @@ export class AuthController {
     @Body({ schema: requestPasswordLinkSchema }) dto: RequestPasswordLinkDto,
   ): Promise<{ data: unknown }> {
     await this.auth.requestPasswordLink(dto);
+
     return { data: { accepted: true } };
   }
 
@@ -69,6 +71,7 @@ export class AuthController {
   @UseGuards(SessionAuthGuard)
   async logout(@Req() req: Request): Promise<{ data: unknown }> {
     await this.auth.logout(req.sessionHash as string);
+
     return { data: { loggedOut: true } };
   }
 
@@ -79,10 +82,13 @@ export class AuthController {
   async changePassword(@CurrentAccount() account: Account, @Body() body: unknown): Promise<{ data: unknown }> {
     // The SHOP-fixed-password check must run before body validation, exactly like the legacy handler.
     if (account.role === 'SHOP') throw apiError(403, 'Shop accounts use the fixed login password', 'SHOP_FIXED_PASSWORD');
+
     const result = changePasswordSchema.safeParse(body);
     if (!result.success) throw apiError(422, 'Invalid request fields', 'VALIDATION_ERROR');
+
     const dto: ChangePasswordDto = result.data;
     await this.auth.changePassword(account, dto);
+
     return { data: { changed: true, requiresLogin: true } };
   }
 }

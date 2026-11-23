@@ -21,6 +21,7 @@ describe('ScopeService', () => {
     shopsCount.mockReset();
     accountShopsCount.mockReset();
     managerWorkersCount.mockReset();
+
     const module: TestingModule = await Test.createTestingModule({ providers: [ScopeService] }).compile();
     service = module.get(ScopeService);
   });

@@ -27,9 +27,8 @@ export class MeService {
 
   async stores(account: Account): Promise<unknown[]> {
     if (!PERSONAL_ROLES.includes(account.role as Role)) throw apiError(403, 'Personal account required');
-    return this.db.$queryRaw<
-      unknown[]
-    >`SELECT s.id,s.name,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id ORDER BY s.name`;
+
+    return this.queryAllShopsForPersonalAccount();
   }
 
   async profile(account: Account): Promise<Record<string, unknown>> {
@@ -45,10 +44,12 @@ export class MeService {
         if (!PERSONAL_ROLES.includes(account.role as Role)) await this.scope.assertShop(tx, account, shop.id);
         shopId = shop.id;
       }
+
       await tx.accounts.update({
         where: { id: account.id },
         data: { preferred_shop_id: shopId, profile_version: { increment: 1 } },
       });
+
       return { preferredShopId: dto.preferredShopId };
     });
   }
@@ -56,25 +57,26 @@ export class MeService {
   async updateProfile(account: Account, dto: ProfileDto): Promise<Record<string, unknown>> {
     return this.db.$transaction((tx) =>
       this.idempotency.run(tx, account.id, dto.operationId, 'PROFILE', dto, async () => {
-        const [previous] = await tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE id=${account.id} FOR UPDATE`;
+        const [previous] = await this.queryAccountForUpdate(tx, account.id);
         if (previous!.profile_version !== dto.expectedVersion) {
           throw apiError(409, 'Profile changed; reload before saving', 'PROFILE_CHANGED');
         }
+
         let preferred: { id: string } | null = null;
         if (dto.preferredShopId !== null) {
           preferred = await this.shopByLoginCode(tx, dto.preferredShopId);
           if (!preferred) throw apiError(422, 'Unknown preferred shop');
           if (!PERSONAL_ROLES.includes(account.role as Role)) await this.scope.assertShop(tx, account, preferred.id);
         }
+
         const name = [dto.firstName, dto.lastName].filter(Boolean).join(' ');
-        const [updated] = await tx.$queryRaw<Account[]>`
-          UPDATE accounts SET first_name=${dto.firstName}, last_name=${dto.lastName}, profile_address=${dto.address},
-            profile_phone=${dto.phone}, name=${name}, preferred_shop_id=${preferred?.id ?? null}, profile_version=profile_version+1
-          WHERE id=${account.id} RETURNING *`;
+        const [updated] = await this.updateAccountProfile(tx, account.id, dto, name, preferred?.id ?? null);
+
         await tx.workers.updateMany({
           where: { account_id: account.id },
           data: { address: dto.address, contact: dto.phone },
         });
+
         await this.audit.record(
           tx,
           account.id,
@@ -95,6 +97,7 @@ export class MeService {
             preferredShopId: preferred?.id ?? null,
           },
         );
+
         return profileInfo(updated!, tx);
       }),
     );
@@ -105,5 +108,28 @@ export class MeService {
       { id: string }[]
     >`SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${loginCode}`;
     return shop ?? null;
+  }
+
+  private async queryAllShopsForPersonalAccount(): Promise<unknown[]> {
+    return this.db.$queryRaw<
+      unknown[]
+    >`SELECT s.id,s.name,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id ORDER BY s.name`;
+  }
+
+  private async queryAccountForUpdate(tx: Queryable, accountId: string): Promise<Account[]> {
+    return tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE id=${accountId} FOR UPDATE`;
+  }
+
+  private async updateAccountProfile(
+    tx: Queryable,
+    accountId: string,
+    dto: ProfileDto,
+    name: string,
+    preferredShopId: string | null,
+  ): Promise<Account[]> {
+    return tx.$queryRaw<Account[]>`
+      UPDATE accounts SET first_name=${dto.firstName}, last_name=${dto.lastName}, profile_address=${dto.address},
+        profile_phone=${dto.phone}, name=${name}, preferred_shop_id=${preferredShopId}, profile_version=profile_version+1
+      WHERE id=${accountId} RETURNING *`;
   }
 }

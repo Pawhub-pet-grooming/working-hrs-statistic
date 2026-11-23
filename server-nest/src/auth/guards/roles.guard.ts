@@ -16,10 +16,12 @@ export class RolesGuard implements CanActivate {
       context.getClass(),
     ]);
     if (!required?.length) return true;
+
     const req = context.switchToHttp().getRequest<Request>();
     if (!req.account || !required.includes(req.account.role as Role)) {
       throw apiError(403, 'Manager access required');
     }
+
     return true;
   }
 }

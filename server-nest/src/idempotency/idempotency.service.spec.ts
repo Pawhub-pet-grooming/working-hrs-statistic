@@ -19,6 +19,7 @@ describe('IdempotencyService', () => {
     findUnique.mockReset();
     create.mockReset();
     update.mockReset().mockResolvedValue(undefined);
+
     const module: TestingModule = await Test.createTestingModule({ providers: [IdempotencyService] }).compile();
     service = module.get(IdempotencyService);
   });

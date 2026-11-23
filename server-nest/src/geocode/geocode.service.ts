@@ -25,6 +25,7 @@ export class GeocodeService {
     url.searchParams.set('q', address.trim());
     url.searchParams.set('limit', '1');
     const key = url.toString();
+
     const cached = this.cache.get(key);
     if (cached && cached.expires > Date.now()) return cached.coordinates;
 
@@ -45,6 +46,7 @@ export class GeocodeService {
     if (!features.length) {
       throw apiError(422, 'Address not found. Include the street number, city and country.', 'ADDRESS_NOT_FOUND');
     }
+
     const geometry = (features[0] as { geometry?: { type?: string; coordinates?: unknown } } | undefined)?.geometry;
     const [longitude, latitude] = Array.isArray(geometry?.coordinates) ? geometry.coordinates : [];
     if (

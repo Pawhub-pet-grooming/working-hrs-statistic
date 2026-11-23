@@ -9,6 +9,7 @@ describe('AuditService', () => {
 
   beforeEach(async () => {
     create.mockReset().mockResolvedValue(undefined);
+
     const module: TestingModule = await Test.createTestingModule({ providers: [AuditService] }).compile();
     service = module.get(AuditService);
   });

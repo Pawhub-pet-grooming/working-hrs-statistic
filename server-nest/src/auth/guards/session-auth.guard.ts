@@ -17,6 +17,7 @@ export class SessionAuthGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<Request>();
     const token = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
     if (!token) throw apiError(401, 'Please sign in');
+
     const tokenHash = createHash('sha256').update(token).digest('hex');
     const session = await this.db.sessions.findFirst({
       where: {
@@ -33,8 +34,10 @@ export class SessionAuthGuard implements CanActivate {
       include: { accounts: true },
     });
     if (!session) throw apiError(401, 'Session expired');
+
     req.account = session.accounts;
     req.sessionHash = tokenHash;
+
     return true;
   }
 }

@@ -9,6 +9,7 @@ async function bootstrap(): Promise<void> {
     .setDescription('NestJS migration target. Routes not yet migrated fall through to the legacy Express app.')
     .setVersion('0.1')
     .build();
+
   const documentFactory = () => {
     const document = SwaggerModule.createDocument(app, swaggerConfig);
     document.paths['/docs-json'] = {
