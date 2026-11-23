@@ -10,6 +10,8 @@ import { envSchema } from './config/env.schema.js';
 import { LoggingInterceptor } from './common/logging.interceptor.js';
 import { DatabaseModule } from './database/database.module.js';
 import { IdempotencyModule } from './idempotency/idempotency.module.js';
+import { MeModule } from './me/me.module.js';
+import { OrganizationModule } from './organization/organization.module.js';
 
 @Module({
   imports: [
@@ -23,7 +25,9 @@ import { IdempotencyModule } from './idempotency/idempotency.module.js';
     DatabaseModule,
     AuditModule,
     IdempotencyModule,
+    OrganizationModule,
     AuthModule,
+    MeModule,
   ],
   controllers: [AppController],
   providers: [

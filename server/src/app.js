@@ -103,66 +103,13 @@ async function accountInfo(account, c = pool) {
   )).rows[0]?.login_code : null;
   return { id: account.id, accountId: account.login_code || null, role: account.role, name: account.name, attendanceEnabled: account.status === "ACTIVE", preferredShopId: preferred || null };
 }
-app.get("/api/v1/me", async (req, res) =>
-  res.json({ data: await accountInfo(req.account) }),
-);
-app.post("/api/v1/me/preferences", async (req, res) => {
-  const body = z.object({ preferredShopId: z.string().regex(/^\d{4}$/).nullable() }).parse(req.body);
-  const data = await transaction(async (c) => {
-    let shop = null;
-    if (body.preferredShopId !== null) {
-      shop = (await c.query(
-        "SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=$1",
-        [body.preferredShopId],
-      )).rows[0];
-      if (!shop) fail(422, "Unknown preferred shop");
-      if (!["WORKER", ...backend].includes(req.account.role)) await assertShop(c, req.account, shop.id);
-    }
-    await c.query("UPDATE accounts SET preferred_shop_id=$1,profile_version=profile_version+1 WHERE id=$2", [shop?.id || null, req.account.id]);
-    return { preferredShopId: body.preferredShopId };
-  });
-  res.json({ data });
-});
+// me, me/preferences, me/stores, me/profile(GET/POST) migrated to server-nest's MeController
+// (Epic 3). accountInfo/profileInfo stay here — still used by /manager/accounts/:id/profile below.
 async function profileInfo(account, c = pool) {
   return { ...await accountInfo(account, c), email: account.email || "", firstName: account.first_name || account.name,
     lastName: account.last_name || "", address: account.profile_address, phone: account.profile_phone,
     version: account.profile_version };
 }
-app.get("/api/v1/me/stores", async (req, res) => {
-  if (!["WORKER", ...backend].includes(req.account.role)) fail(403, "Personal account required");
-  const data = (await pool.query('SELECT s.id,s.name,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id ORDER BY s.name')).rows;
-  res.json({ data });
-});
-app.get("/api/v1/me/profile", async (req, res) => res.json({ data: await profileInfo(req.account) }));
-app.post("/api/v1/me/profile", async (req, res) => {
-  const body = z.object({
-    operationId: uuid, expectedVersion: z.number().int().positive(),
-    firstName: z.string().trim().min(1).max(100), lastName: z.string().trim().max(100),
-    address: z.string().trim().max(500), phone: z.string().trim().max(50),
-    preferredShopId: z.string().regex(/^\d{4}$/).nullable(),
-  }).strict().parse(req.body);
-  const data = await transaction((c) => idem(c, req.account, body, "PROFILE", async () => {
-    const previous = (await c.query("SELECT * FROM accounts WHERE id=$1 FOR UPDATE", [req.account.id])).rows[0];
-    if (previous.profile_version !== body.expectedVersion) fail(409, "Profile changed; reload before saving", "PROFILE_CHANGED");
-    let preferred = null;
-    if (body.preferredShopId !== null) {
-      preferred = (await c.query("SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=$1", [body.preferredShopId])).rows[0];
-      if (!preferred) fail(422, "Unknown preferred shop");
-      if (!["WORKER", ...backend].includes(req.account.role)) await assertShop(c, req.account, preferred.id);
-    }
-    const name = [body.firstName, body.lastName].filter(Boolean).join(" ");
-    const updated = (await c.query(
-      "UPDATE accounts SET first_name=$1,last_name=$2,profile_address=$3,profile_phone=$4,name=$5,preferred_shop_id=$6,profile_version=profile_version+1 WHERE id=$7 RETURNING *",
-      [body.firstName, body.lastName, body.address, body.phone, name, preferred?.id || null, req.account.id],
-    )).rows[0];
-    await c.query("UPDATE workers SET address=$1,contact=$2 WHERE account_id=$3", [body.address, body.phone, req.account.id]);
-    await audit(c, req.account, "PROFILE_UPDATE", req.account.id,
-      { firstName: previous.first_name, lastName: previous.last_name, address: previous.profile_address, phone: previous.profile_phone, preferredShopId: previous.preferred_shop_id },
-      { firstName: body.firstName, lastName: body.lastName, address: body.address, phone: body.phone, preferredShopId: preferred?.id || null });
-    return profileInfo(updated, c);
-  }));
-  res.json({ data });
-});
 function manager(req, res, next) {
   // /manager/auth/login is public (migrated to server-nest) and never reaches here with
   // req.account set — this prefix-mounted gate would otherwise match it too.
