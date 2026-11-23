@@ -1,15 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
-import { BACKEND_ROLES, type Account, type Role } from '../auth/types.js';
+import { PERSONAL_ROLES, type Account, type Role } from '../auth/types.js';
 import { accountInfo, profileInfo } from '../common/account-info.util.js';
 import { apiError } from '../common/api-error.js';
 import { DbService, type Queryable } from '../database/db.service.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { ScopeService } from '../organization/scope.service.js';
 import type { PreferencesDto, ProfileDto } from './me.schemas.js';
-
-/** Accounts that manage their own preferred shop directly, bypassing the SHOP-role scope check. */
-const PERSONAL_ROLES: Role[] = ['WORKER', ...BACKEND_ROLES];
 
 /** Mirrors legacy's `/api/v1/me*` routes (server/src/app.js). */
 @Injectable()

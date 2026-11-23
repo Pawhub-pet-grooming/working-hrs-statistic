@@ -4,6 +4,7 @@ import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
+import { AttendanceModule } from './attendance/attendance.module.js';
 import { AuditModule } from './audit/audit.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { envSchema } from './config/env.schema.js';
@@ -28,6 +29,7 @@ import { OrganizationModule } from './organization/organization.module.js';
     OrganizationModule,
     AuthModule,
     MeModule,
+    AttendanceModule,
   ],
   controllers: [AppController],
   providers: [
