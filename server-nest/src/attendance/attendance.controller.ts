@@ -22,17 +22,26 @@ export class AttendanceController {
   constructor(private readonly attendance: AttendanceService) {}
 
   @Post()
-  async clockInOrOut(@CurrentAccount() account: Account, @Body({ schema: clockSchema }) dto: ClockDto): Promise<{ data: unknown }> {
+  async clockInOrOut(
+    @CurrentAccount() account: Account,
+    @Body({ schema: clockSchema }) dto: ClockDto,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.clockInOrOut(account, dto) };
   }
 
   @Get('status')
-  async status(@CurrentAccount() account: Account, @Query({ schema: statusQuerySchema }) query: StatusQueryDto): Promise<{ data: unknown }> {
+  async status(
+    @CurrentAccount() account: Account,
+    @Query({ schema: statusQuerySchema }) query: StatusQueryDto,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.status(account, query.shopId, query.workerId) };
   }
 
   @Get(':id/history')
-  async history(@CurrentAccount() account: Account, @Param('id', { schema: recordIdParamSchema }) id: string): Promise<{ data: unknown }> {
+  async history(
+    @CurrentAccount() account: Account,
+    @Param('id', { schema: recordIdParamSchema }) id: string,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.getHistory(account, id) };
   }
 
@@ -47,7 +56,10 @@ export class AttendanceController {
 
   @Post('exports')
   @HttpCode(202)
-  async exportRecords(@CurrentAccount() account: Account, @Body({ schema: exportSchema }) dto: ExportDto): Promise<{ data: unknown }> {
+  async exportRecords(
+    @CurrentAccount() account: Account,
+    @Body({ schema: exportSchema }) dto: ExportDto,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.exportRecords(account, false, dto) };
   }
 

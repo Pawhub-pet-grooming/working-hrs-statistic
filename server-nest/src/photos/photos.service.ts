@@ -40,9 +40,14 @@ export class PhotosService {
     private readonly scope: ScopeService,
   ) {}
 
-  async upload(account: Account, dto: UploadPhotoDto, file: Express.Multer.File | undefined): Promise<{ photoId: string }> {
+  async upload(
+    account: Account,
+    dto: UploadPhotoDto,
+    file: Express.Multer.File | undefined,
+  ): Promise<{ photoId: string }> {
     if (!PHOTO_UPLOAD_ROLES.includes(account.role as Role)) throw apiError(403, 'App account required');
-    if (process.env.PHOTO_STORAGE !== 'local' && !process.env.PHOTO_BUCKET) throw apiError(503, 'Photo storage not configured');
+    if (process.env.PHOTO_STORAGE !== 'local' && !process.env.PHOTO_BUCKET)
+      throw apiError(503, 'Photo storage not configured');
     if (!file) throw apiError(422, 'Photo required');
 
     const meta = await sharp(file.buffer, { limitInputPixels: 20_000_000 }).metadata();
@@ -63,7 +68,13 @@ export class PhotosService {
           await writeFile(filePath, file.buffer, { mode: 0o600 });
         } else {
           await this.s3.send(
-            new PutObjectCommand({ Bucket: process.env.PHOTO_BUCKET, Key: key, Body: file.buffer, ContentType: `image/${meta.format}`, ServerSideEncryption: 'AES256' }),
+            new PutObjectCommand({
+              Bucket: process.env.PHOTO_BUCKET,
+              Key: key,
+              Body: file.buffer,
+              ContentType: `image/${meta.format}`,
+              ServerSideEncryption: 'AES256',
+            }),
           );
         }
 
@@ -95,16 +106,24 @@ export class PhotosService {
       throw apiError(403, 'Forbidden');
     }
 
-    if (photo.status === 'EXPIRED') throw apiError(410, 'Photo removed after the 3-month retention period', 'PHOTO_EXPIRED');
+    if (photo.status === 'EXPIRED')
+      throw apiError(410, 'Photo removed after the 3-month retention period', 'PHOTO_EXPIRED');
     if (photo.status !== 'READY') throw apiError(404, 'Photo unavailable');
 
     return photo;
   }
 
-  async photoUrl(photo: PhotoRow): Promise<{ url: string; requiresAuthentication: true } | { url: string; expiresIn: number }> {
-    if (photo.storage_key.startsWith('local:')) return { url: `/api/v1/photos/${photo.id}/file`, requiresAuthentication: true };
+  async photoUrl(
+    photo: PhotoRow,
+  ): Promise<{ url: string; requiresAuthentication: true } | { url: string; expiresIn: number }> {
+    if (photo.storage_key.startsWith('local:'))
+      return { url: `/api/v1/photos/${photo.id}/file`, requiresAuthentication: true };
 
-    const url = await getSignedUrl(this.s3, new GetObjectCommand({ Bucket: process.env.PHOTO_BUCKET, Key: photo.storage_key }), { expiresIn: 120 });
+    const url = await getSignedUrl(
+      this.s3,
+      new GetObjectCommand({ Bucket: process.env.PHOTO_BUCKET, Key: photo.storage_key }),
+      { expiresIn: 120 },
+    );
     return { url, expiresIn: 120 };
   }
 }

@@ -30,7 +30,9 @@ export const managedProfileSchema = z
   .strict();
 export type ManagedProfileDto = z.infer<typeof managedProfileSchema>;
 
-export const removeAccountSchema = z.object({ operationId: uuid, expectedVersion: z.number().int().positive() }).strict();
+export const removeAccountSchema = z
+  .object({ operationId: uuid, expectedVersion: z.number().int().positive() })
+  .strict();
 export type RemoveAccountDto = z.infer<typeof removeAccountSchema>;
 
 export const approveAccountSchema = z.object({ operationId: uuid }).strict();

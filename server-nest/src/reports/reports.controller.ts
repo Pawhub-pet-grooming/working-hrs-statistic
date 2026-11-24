@@ -23,7 +23,11 @@ export class ReportsController {
    */
   @Post('pdf')
   @HttpCode(200)
-  async pdf(@CurrentAccount() account: Account, @Body({ schema: reportPdfSchema }) dto: ReportPdfDto, @Res() res: Response): Promise<void> {
+  async pdf(
+    @CurrentAccount() account: Account,
+    @Body({ schema: reportPdfSchema }) dto: ReportPdfDto,
+    @Res() res: Response,
+  ): Promise<void> {
     const buffer = await this.reports.buildPdf(account, dto);
     res.type('pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Pawhub-${dto.month}.pdf"`);

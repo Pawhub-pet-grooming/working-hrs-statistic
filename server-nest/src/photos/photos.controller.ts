@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Post, Res, UseFilters, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Res,
+  UseFilters,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
@@ -19,7 +30,9 @@ export class PhotosController {
 
   @Post()
   @UseFilters(MulterErrorFilter)
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  @UseInterceptors(
+    FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } }),
+  )
   async upload(
     @CurrentAccount() account: Account,
     @Body({ schema: uploadPhotoSchema }) dto: UploadPhotoDto,
@@ -29,7 +42,11 @@ export class PhotosController {
   }
 
   @Get(':id/file')
-  async file(@CurrentAccount() account: Account, @Param('id', { schema: photoIdParamSchema }) id: string, @Res() res: Response): Promise<void> {
+  async file(
+    @CurrentAccount() account: Account,
+    @Param('id', { schema: photoIdParamSchema }) id: string,
+    @Res() res: Response,
+  ): Promise<void> {
     const photo = await this.photos.readablePhoto(account, id);
     if (!photo.storage_key.startsWith('local:')) throw apiError(404, 'Local photo unavailable');
 
@@ -39,7 +56,10 @@ export class PhotosController {
   }
 
   @Get(':id')
-  async get(@CurrentAccount() account: Account, @Param('id', { schema: photoIdParamSchema }) id: string): Promise<{ data: unknown }> {
+  async get(
+    @CurrentAccount() account: Account,
+    @Param('id', { schema: photoIdParamSchema }) id: string,
+  ): Promise<{ data: unknown }> {
     const photo = await this.photos.readablePhoto(account, id);
     return { data: await this.photos.photoUrl(photo) };
   }

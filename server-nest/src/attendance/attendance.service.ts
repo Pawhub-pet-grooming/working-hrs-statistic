@@ -7,7 +7,12 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { ScopeService } from '../organization/scope.service.js';
 import { ATTENDANCE_ZONE, localDate, monthBounds, type MonthBounds } from './attendance-domain.util.js';
-import { dailyAttendanceHours, totalAttendanceHours, type AttendanceHoursRecord, type DailyHours } from './attendance-hours.util.js';
+import {
+  dailyAttendanceHours,
+  totalAttendanceHours,
+  type AttendanceHoursRecord,
+  type DailyHours,
+} from './attendance-hours.util.js';
 import { attendanceLocation, type AttendanceLocationInput } from './attendance-location.util.js';
 import type {
   AdjustmentDto,
@@ -283,7 +288,8 @@ export class AttendanceService {
   ) {}
 
   async clockInOrOut(account: Account, dto: ClockDto): Promise<Record<string, unknown>> {
-    if (!PERSONAL_ROLES.includes(account.role as Role) && account.role !== 'SHOP') throw apiError(403, 'App account required');
+    if (!PERSONAL_ROLES.includes(account.role as Role) && account.role !== 'SHOP')
+      throw apiError(403, 'App account required');
 
     return this.db.$transaction((tx) =>
       this.idempotency.run(tx, account.id, dto.operationId, 'ATTENDANCE', dto, async () => {
@@ -297,11 +303,15 @@ export class AttendanceService {
           await this.scope.assertShop(tx, account, shop.id);
         }
 
-        if (dto.expectedDailyCount !== undefined) await this.checkDailyCountExpectation(tx, worker.id, shop.id, dto.occurredAt, dto.expectedDailyCount);
+        if (dto.expectedDailyCount !== undefined)
+          await this.checkDailyCountExpectation(tx, worker.id, shop.id, dto.occurredAt, dto.expectedDailyCount);
 
         await this.checkPhoto(tx, account, dto);
 
-        if (dto.location?.status === 'AVAILABLE' && (dto.location.latitude === undefined || dto.location.longitude === undefined)) {
+        if (
+          dto.location?.status === 'AVAILABLE' &&
+          (dto.location.latitude === undefined || dto.location.longitude === undefined)
+        ) {
           throw apiError(422, 'Coordinates required');
         }
 
@@ -311,8 +321,10 @@ export class AttendanceService {
         const first = !(await this.hasSignInToday(tx, worker.id, day));
 
         if (dto.type === 'SIGN_OUT' && dto.plannedStartAt) throw apiError(422, 'Sign out cannot include plan');
-        if (dto.type === 'SIGN_IN' && first && !dto.plannedStartAt) throw apiError(422, 'First sign in requires planned time');
-        if (dto.plannedStartAt && localDate(dto.plannedStartAt) !== day) throw apiError(422, 'Plan must be on sign-in date');
+        if (dto.type === 'SIGN_IN' && first && !dto.plannedStartAt)
+          throw apiError(422, 'First sign in requires planned time');
+        if (dto.plannedStartAt && localDate(dto.plannedStartAt) !== day)
+          throw apiError(422, 'Plan must be on sign-in date');
 
         const record = await this.insertAttendanceRecord(tx, worker.id, shop.id, account, dto, first, position);
 
@@ -332,7 +344,11 @@ export class AttendanceService {
     );
   }
 
-  async status(account: Account, shopCode: string | undefined, workerCode: string | undefined): Promise<Record<string, unknown>> {
+  async status(
+    account: Account,
+    shopCode: string | undefined,
+    workerCode: string | undefined,
+  ): Promise<Record<string, unknown>> {
     const code = workerCode || account.login_code || undefined;
     const { worker, shop } = await this.resolveAppScope(this.db, account, shopCode, code);
 
@@ -360,13 +376,16 @@ export class AttendanceService {
     workerCode: string | null | undefined,
     allowAllShops = false,
   ): Promise<{ worker: AppScopeWorkerRow; shop: AppScopeShopRow | null }> {
-    if (BACKEND_ROLES.includes(account.role as Role)) await this.ensureWorkerRow(c, account.id, account.profile_phone, account.profile_address);
+    if (BACKEND_ROLES.includes(account.role as Role))
+      await this.ensureWorkerRow(c, account.id, account.profile_phone, account.profile_address);
 
     const worker = await this.queryAppScopeWorker(c, workerCode || null, account.id);
     const shop = shopCode ? await this.queryAppScopeShop(c, shopCode) : null;
 
-    if (worker && account.role === 'SHOP' && worker.account_status !== 'ACTIVE') throw apiError(404, 'Active employee required');
-    if (!worker || (!shop && !(allowAllShops && !shopCode && account.role !== 'SHOP'))) throw apiError(422, 'Unknown worker or shop');
+    if (worker && account.role === 'SHOP' && worker.account_status !== 'ACTIVE')
+      throw apiError(404, 'Active employee required');
+    if (!worker || (!shop && !(allowAllShops && !shopCode && account.role !== 'SHOP')))
+      throw apiError(422, 'Unknown worker or shop');
 
     if (PERSONAL_ROLES.includes(account.role as Role)) {
       if (worker.account_id !== account.id) throw apiError(403, 'Only your own records');
@@ -417,12 +436,23 @@ export class AttendanceService {
 
     for (const signIn of opens.values()) {
       const old = localDate(signIn.original_occurred_at) < localDate(new Date());
-      await this.insertSegment(tx, workerId, signIn, null, old || crossShopUnclosed.has(signIn.id) ? 'MISSING_SIGN_OUT' : null);
+      await this.insertSegment(
+        tx,
+        workerId,
+        signIn,
+        null,
+        old || crossShopUnclosed.has(signIn.id) ? 'MISSING_SIGN_OUT' : null,
+      );
     }
   }
 
   /** Mirrors legacy's shared `GET /attendance` + `GET /manager/staff-attendance` handler. */
-  async listRecords(account: Account, staffMode: boolean, range: DateRangeDto, rawQuery: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async listRecords(
+    account: Account,
+    staffMode: boolean,
+    range: DateRangeDto,
+    rawQuery: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     this.checkRangeWithinAMonth(range);
 
     const shopCodes = asCodeQueryValue(rawQuery.shopIds ?? rawQuery.shopId);
@@ -431,7 +461,13 @@ export class AttendanceService {
       ? await this.staffAttendanceScope(this.db, account, shopCodes, workerCodes, rawQuery.includeDeleted === 'true')
       : await this.personalAttendanceScope(this.db, account, shopCodes, workerCodes);
 
-    const rows = await this.queryAttendanceListing(this.db, scope.workerIds, scope.shopIds, range.fromDate, range.toDate);
+    const rows = await this.queryAttendanceListing(
+      this.db,
+      scope.workerIds,
+      scope.shopIds,
+      range.fromDate,
+      range.toDate,
+    );
     const dailyHours = this.attendanceDays(rows);
 
     return { items: rows, dailyHours, totalHours: totalAttendanceHours(dailyHours) };
@@ -443,15 +479,27 @@ export class AttendanceService {
 
     const staff = await this.queryStaffListing(this.db, account.role, account.id);
 
-    return includeDeleted ? staff.filter((p) => ['ACTIVE', 'DISABLED'].includes(p.status)) : staff.filter((p) => p.status === 'ACTIVE');
+    return includeDeleted
+      ? staff.filter((p) => ['ACTIVE', 'DISABLED'].includes(p.status))
+      : staff.filter((p) => p.status === 'ACTIVE');
   }
 
   /** Mirrors legacy's `GET /manager/attendance/locations`. */
-  async listLocations(account: Account, range: DateRangeDto, cursor: number, rawQuery: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async listLocations(
+    account: Account,
+    range: DateRangeDto,
+    cursor: number,
+    rawQuery: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     if (!this.scope.isCompanyAdmin(account)) throw apiError(403, 'General manager or Owner required');
     this.checkRangeWithinAMonth(range);
 
-    const scope = await this.staffAttendanceScope(this.db, account, asCodeQueryValue(rawQuery.shopIds), asCodeQueryValue(rawQuery.workerIds));
+    const scope = await this.staffAttendanceScope(
+      this.db,
+      account,
+      asCodeQueryValue(rawQuery.shopIds),
+      asCodeQueryValue(rawQuery.workerIds),
+    );
     const rows = await this.queryLocations(this.db, scope.workerIds, scope.shopIds, range.fromDate, range.toDate);
 
     const records = rows.map((row) => {
@@ -491,7 +539,14 @@ export class AttendanceService {
   /** Mirrors legacy's `GET /manager/attendance` (the paginated admin table — a separate scope scheme from `staffAttendanceScope`). */
   async managerRecordsPage(account: Account, query: ManagerAttendanceListQueryDto): Promise<Record<string, unknown>> {
     const period = monthBounds(query.month);
-    const all = await this.queryManagerRecords(this.db, account.role, account.id, period, query.shopId ?? null, query.workerId ?? null);
+    const all = await this.queryManagerRecords(
+      this.db,
+      account.role,
+      account.id,
+      period,
+      query.shopId ?? null,
+      query.workerId ?? null,
+    );
 
     return {
       items: all.slice(query.cursor, query.cursor + query.limit),
@@ -503,7 +558,14 @@ export class AttendanceService {
   /** Mirrors legacy's `GET /manager/attendance/summary`. */
   async managerSummary(account: Account, query: ManagerAttendanceSummaryQueryDto): Promise<Record<string, unknown>> {
     const period = monthBounds(query.month);
-    const groups = await this.queryManagerSummary(this.db, account.role, account.id, period, query.shopId ?? null, query.workerId ?? null);
+    const groups = await this.queryManagerSummary(
+      this.db,
+      account.role,
+      account.id,
+      period,
+      query.shopId ?? null,
+      query.workerId ?? null,
+    );
 
     return { groups, period };
   }
@@ -533,7 +595,10 @@ export class AttendanceService {
   }
 
   /** Mirrors the inline lookup in legacy's reports/pdf route: resolves a summary group's codes back to raw ids for `assertRecordScope`. */
-  async resolveWorkerShopIds(workerCode: string, shopCode: string): Promise<{ worker_id: string; shop_id: string } | undefined> {
+  async resolveWorkerShopIds(
+    workerCode: string,
+    shopCode: string,
+  ): Promise<{ worker_id: string; shop_id: string } | undefined> {
     const rows = await this.db.$queryRaw<{ worker_id: string; shop_id: string }[]>`
       SELECT w.id AS worker_id,s.id AS shop_id FROM workers w JOIN accounts wa ON wa.id=w.account_id
       CROSS JOIN shops s JOIN accounts sa ON sa.id=s.account_id
@@ -564,7 +629,14 @@ export class AttendanceService {
     const shopCode = query.shopId ?? null;
     const workerCode = query.workerId ?? null;
 
-    const adjustments = await this.queryPendingAdjustments(this.db, account.role, account.id, period, shopCode, workerCode);
+    const adjustments = await this.queryPendingAdjustments(
+      this.db,
+      account.role,
+      account.id,
+      period,
+      shopCode,
+      workerCode,
+    );
     const issues = await this.queryInvalidIssues(this.db, account.role, account.id, period, shopCode, workerCode);
     const people = account.role === 'GENERAL_MANAGER' ? await this.queryPendingPeople(this.db) : [];
 
@@ -587,7 +659,8 @@ export class AttendanceService {
         if (record.version !== dto.expectedRecordVersion || adjustment.status !== 'PENDING') {
           throw apiError(409, 'Record changed; reload', 'VERSION_CONFLICT');
         }
-        if (await this.hasOtherPendingAdjustment(tx, record.id, adjustment.id)) throw apiError(409, 'Multiple adjustments require manual resolution');
+        if (await this.hasOtherPendingAdjustment(tx, record.id, adjustment.id))
+          throw apiError(409, 'Multiple adjustments require manual resolution');
 
         const approved = dto.decision === 'APPROVE';
         const resultingAt = approved ? adjustment.after_at : record.confirmed_occurred_at;
@@ -595,7 +668,14 @@ export class AttendanceService {
         const type = approved ? adjustment.after_type || record.sign_type : record.sign_type;
 
         await this.updateAdjustmentStatus(tx, adjustment.id, approved ? 'APPROVED' : 'REJECTED');
-        await this.insertValidation(tx, adjustment.id, account.id, dto.decision, record.confirmed_occurred_at, resultingAt);
+        await this.insertValidation(
+          tx,
+          adjustment.id,
+          account.id,
+          dto.decision,
+          record.confirmed_occurred_at,
+          resultingAt,
+        );
         await this.updateRecordForDecision(tx, record.id, resultingAt, deleted, type, approved);
         await this.rebuildWorkSegments(tx, record.worker_id);
         await this.audit.record(tx, account.id, 'VALIDATION_' + dto.decision, record.id);
@@ -618,7 +698,11 @@ export class AttendanceService {
   }
 
   /** Mirrors legacy's `attendanceAdjustment()`, shared by the adjustments endpoints and corrections. */
-  async submitAdjustment(account: Account, managerEndpoint: boolean, dto: AdjustmentDto): Promise<Record<string, unknown>> {
+  async submitAdjustment(
+    account: Account,
+    managerEndpoint: boolean,
+    dto: AdjustmentDto,
+  ): Promise<Record<string, unknown>> {
     const managerRequest = BACKEND_ROLES.includes(account.role as Role);
 
     return this.db.$transaction((tx) =>
@@ -629,7 +713,8 @@ export class AttendanceService {
             : await this.loadAdjustmentRecord(tx, account, managerEndpoint, managerRequest, dto);
 
         const pending = await this.lockPendingAdjustments(tx, record.id);
-        if (!managerRequest && pending.length > 1) throw apiError(409, 'Multiple pending changes require manager resolution');
+        if (!managerRequest && pending.length > 1)
+          throw apiError(409, 'Multiple pending changes require manager resolution');
 
         if (managerRequest) return this.applyManagerAdjustment(tx, account, record, pending, dto);
 
@@ -687,7 +772,8 @@ export class AttendanceService {
       await this.resolveAppScope(tx, account, record.shop_code, record.worker_code);
     }
 
-    if (!managerRequest && record.manager_confirmed) throw apiError(403, 'Confirmed records can only be changed by a manager', 'RECORD_CONFIRMED');
+    if (!managerRequest && record.manager_confirmed)
+      throw apiError(403, 'Confirmed records can only be changed by a manager', 'RECORD_CONFIRMED');
     if (record.confirmed_deleted) throw apiError(409, 'Record is already marked for removal');
     if (record.version !== dto.expectedVersion) throw apiError(409, 'Record changed');
     if (dto.action === 'UPDATE' && !dto.occurredAt) throw apiError(422, 'Time required');
@@ -704,15 +790,36 @@ export class AttendanceService {
   ): Promise<Record<string, unknown>> {
     for (const old of pending) {
       await this.updateAdjustmentStatus(tx, old.id, 'REJECTED');
-      await this.insertValidation(tx, old.id, account.id, 'REJECT', record.confirmed_occurred_at, record.confirmed_occurred_at);
-      await this.audit.record(tx, account.id, 'ATTENDANCE_REQUEST_SUPERSEDED', record.id, { adjustmentId: old.id }, { reason: 'Direct manager change' });
+      await this.insertValidation(
+        tx,
+        old.id,
+        account.id,
+        'REJECT',
+        record.confirmed_occurred_at,
+        record.confirmed_occurred_at,
+      );
+      await this.audit.record(
+        tx,
+        account.id,
+        'ATTENDANCE_REQUEST_SUPERSEDED',
+        record.id,
+        { adjustmentId: old.id },
+        { reason: 'Direct manager change' },
+      );
     }
 
     const deleting = dto.action === 'DELETE';
     const type = dto.type || record.sign_type;
-    const after = deleting ? null : dto.occurredAt ?? null;
+    const after = deleting ? null : (dto.occurredAt ?? null);
 
-    const adjustment = await this.insertManagerAdjustment(tx, record, account.id, dto.action, after, deleting ? null : type);
+    const adjustment = await this.insertManagerAdjustment(
+      tx,
+      record,
+      account.id,
+      dto.action,
+      after,
+      deleting ? null : type,
+    );
     await this.insertValidation(tx, adjustment.id, account.id, 'APPROVE', record.confirmed_occurred_at, after);
     await this.updateRecordForManagerEdit(tx, record.id, type, after, deleting);
     await this.rebuildWorkSegments(tx, record.worker_id);
@@ -741,16 +848,36 @@ export class AttendanceService {
     pending: PendingAdjustmentRow[],
     dto: AdjustmentDto,
   ): Promise<Record<string, unknown>> {
-    const after = dto.action === 'DELETE' ? null : dto.occurredAt ?? null;
+    const after = dto.action === 'DELETE' ? null : (dto.occurredAt ?? null);
     const finalType = dto.type || pending[0]?.after_type || record.sign_type;
 
     const adjustment = pending.length
-      ? await this.updatePendingAdjustment(tx, pending[0]!.id, account.id, dto.action, after, dto.action === 'DELETE' ? null : finalType, record.version)
-      : await this.insertWorkerAdjustment(tx, record, account.id, dto.action, after, dto.action === 'DELETE' ? null : finalType);
+      ? await this.updatePendingAdjustment(
+          tx,
+          pending[0]!.id,
+          account.id,
+          dto.action,
+          after,
+          dto.action === 'DELETE' ? null : finalType,
+          record.version,
+        )
+      : await this.insertWorkerAdjustment(
+          tx,
+          record,
+          account.id,
+          dto.action,
+          after,
+          dto.action === 'DELETE' ? null : finalType,
+        );
 
     await this.updateRecordForPendingEdit(tx, record.id, after, dto.action === 'DELETE');
     await this.rebuildWorkSegments(tx, record.worker_id);
-    await this.audit.record(tx, account.id, `ATTENDANCE_${dto.action === 'DELETE' ? 'REMOVAL' : dto.action}_REQUEST`, record.id);
+    await this.audit.record(
+      tx,
+      account.id,
+      `ATTENDANCE_${dto.action === 'DELETE' ? 'REMOVAL' : dto.action}_REQUEST`,
+      record.id,
+    );
 
     return {
       recordId: record.id,
@@ -766,7 +893,9 @@ export class AttendanceService {
   }
 
   private async lockFullRecordById(tx: Prisma.TransactionClient, id: string): Promise<AdjustmentRecordRow | undefined> {
-    const [record] = await tx.$queryRaw<AdjustmentRecordRow[]>`SELECT * FROM attendance_records WHERE id=${id}::uuid FOR UPDATE`;
+    const [record] = await tx.$queryRaw<
+      AdjustmentRecordRow[]
+    >`SELECT * FROM attendance_records WHERE id=${id}::uuid FOR UPDATE`;
     return record;
   }
 
@@ -782,27 +911,44 @@ export class AttendanceService {
       WHERE a.record_id=${recordId}::uuid ORDER BY a.created_at`;
   }
 
-  private async queryAdjustmentRecordId(c: Queryable, adjustmentId: string): Promise<{ record_id: string } | undefined> {
-    const [row] = await c.$queryRaw<{ record_id: string }[]>`SELECT record_id FROM attendance_adjustments WHERE id=${adjustmentId}::uuid`;
+  private async queryAdjustmentRecordId(
+    c: Queryable,
+    adjustmentId: string,
+  ): Promise<{ record_id: string } | undefined> {
+    const [row] = await c.$queryRaw<
+      { record_id: string }[]
+    >`SELECT record_id FROM attendance_adjustments WHERE id=${adjustmentId}::uuid`;
     return row;
   }
 
   private async lockAdjustmentById(
     tx: Prisma.TransactionClient,
     adjustmentId: string,
-  ): Promise<{ id: string; status: string; action: string; after_at: Date | null; after_type: string | null } | undefined> {
-    const [row] = await tx.$queryRaw<{ id: string; status: string; action: string; after_at: Date | null; after_type: string | null }[]>`
+  ): Promise<
+    { id: string; status: string; action: string; after_at: Date | null; after_type: string | null } | undefined
+  > {
+    const [row] = await tx.$queryRaw<
+      { id: string; status: string; action: string; after_at: Date | null; after_type: string | null }[]
+    >`
       SELECT * FROM attendance_adjustments WHERE id=${adjustmentId}::uuid FOR UPDATE`;
     return row;
   }
 
-  private async hasOtherPendingAdjustment(tx: Prisma.TransactionClient, recordId: string, excludeAdjustmentId: string): Promise<boolean> {
+  private async hasOtherPendingAdjustment(
+    tx: Prisma.TransactionClient,
+    recordId: string,
+    excludeAdjustmentId: string,
+  ): Promise<boolean> {
     const rows = await tx.$queryRaw<{ exists: true }[]>`
       SELECT 1 AS exists FROM attendance_adjustments WHERE record_id=${recordId}::uuid AND status='PENDING' AND id<>${excludeAdjustmentId}::uuid`;
     return rows.length > 0;
   }
 
-  private async updateAdjustmentStatus(tx: Prisma.TransactionClient, adjustmentId: string, status: string): Promise<void> {
+  private async updateAdjustmentStatus(
+    tx: Prisma.TransactionClient,
+    adjustmentId: string,
+    status: string,
+  ): Promise<void> {
     await tx.$executeRaw`UPDATE attendance_adjustments SET status=${status} WHERE id=${adjustmentId}::uuid`;
   }
 
@@ -834,7 +980,11 @@ export class AttendanceService {
       WHERE id=${recordId}::uuid`;
   }
 
-  private async queryAdjustmentWorkerByCode(tx: Prisma.TransactionClient, code: string | null, accountId: string): Promise<AdjustmentWorkerLookupRow | undefined> {
+  private async queryAdjustmentWorkerByCode(
+    tx: Prisma.TransactionClient,
+    code: string | null,
+    accountId: string,
+  ): Promise<AdjustmentWorkerLookupRow | undefined> {
     const [worker] = await tx.$queryRaw<AdjustmentWorkerLookupRow[]>`
       SELECT w.id FROM workers w JOIN accounts a ON a.id=w.account_id
       WHERE (a.login_code=${code} OR (${code}='__self__' AND a.id=${accountId}::uuid) OR ${code}='__worker__'||w.id::text) AND a.status='ACTIVE'`;
@@ -856,7 +1006,10 @@ export class AttendanceService {
     return record!;
   }
 
-  private async lockAdjustmentRecordById(tx: Prisma.TransactionClient, recordId: string): Promise<AdjustmentWorkerLoadRow | undefined> {
+  private async lockAdjustmentRecordById(
+    tx: Prisma.TransactionClient,
+    recordId: string,
+  ): Promise<AdjustmentWorkerLoadRow | undefined> {
     const [record] = await tx.$queryRaw<AdjustmentWorkerLoadRow[]>`
       SELECT r.*,wa.login_code AS worker_code,sa.login_code AS shop_code FROM attendance_records r
       JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id JOIN accounts sa ON sa.id=s.account_id
@@ -864,8 +1017,13 @@ export class AttendanceService {
     return record;
   }
 
-  private async lockPendingAdjustments(tx: Prisma.TransactionClient, recordId: string): Promise<PendingAdjustmentRow[]> {
-    return tx.$queryRaw<PendingAdjustmentRow[]>`SELECT * FROM attendance_adjustments WHERE record_id=${recordId}::uuid AND status='PENDING' FOR UPDATE`;
+  private async lockPendingAdjustments(
+    tx: Prisma.TransactionClient,
+    recordId: string,
+  ): Promise<PendingAdjustmentRow[]> {
+    return tx.$queryRaw<
+      PendingAdjustmentRow[]
+    >`SELECT * FROM attendance_adjustments WHERE record_id=${recordId}::uuid AND status='PENDING' FOR UPDATE`;
   }
 
   private async insertManagerAdjustment(
@@ -886,7 +1044,13 @@ export class AttendanceService {
     return adjustment!;
   }
 
-  private async updateRecordForManagerEdit(tx: Prisma.TransactionClient, recordId: string, type: string, after: string | null, deleting: boolean): Promise<void> {
+  private async updateRecordForManagerEdit(
+    tx: Prisma.TransactionClient,
+    recordId: string,
+    type: string,
+    after: string | null,
+    deleting: boolean,
+  ): Promise<void> {
     await tx.$executeRaw`
       UPDATE attendance_records SET sign_type=${type},effective_occurred_at=COALESCE(${after}::timestamptz,effective_occurred_at),
         confirmed_occurred_at=COALESCE(${after}::timestamptz,confirmed_occurred_at),effective_deleted=${deleting},confirmed_deleted=${deleting},
@@ -927,7 +1091,12 @@ export class AttendanceService {
     return adjustment!;
   }
 
-  private async updateRecordForPendingEdit(tx: Prisma.TransactionClient, recordId: string, after: string | null, deleting: boolean): Promise<void> {
+  private async updateRecordForPendingEdit(
+    tx: Prisma.TransactionClient,
+    recordId: string,
+    after: string | null,
+    deleting: boolean,
+  ): Promise<void> {
     await tx.$executeRaw`
       UPDATE attendance_records SET effective_occurred_at=COALESCE(${after}::timestamptz,effective_occurred_at),effective_deleted=${deleting},version=version+1
       WHERE id=${recordId}::uuid`;
@@ -995,51 +1164,77 @@ export class AttendanceService {
     if (staffMode) {
       const scope = await this.staffAttendanceScope(this.db, account, shopCodes, workerCodes);
       const ids = new Set(scope.workerIds);
-      const existing = await this.queryWorkerIdsForRecords(this.db, dto.records.map((r) => r.id));
+      const existing = await this.queryWorkerIdsForRecords(
+        this.db,
+        dto.records.map((r) => r.id),
+      );
       if (existing.some((r) => !ids.has(r.worker_id))) throw apiError(403, 'Staff outside your managed groomers');
     }
 
     return this.db.$transaction((tx) =>
-      this.idempotency.run(tx, account.id, dto.operationId, staffMode ? 'STAFF_ATTENDANCE_EMAIL_EXPORT' : 'ATTENDANCE_EMAIL_EXPORT', dto, async () => {
-        const scope = staffMode
-          ? await this.staffAttendanceScope(tx, account, shopCodes, workerCodes)
-          : await this.personalAttendanceScope(tx, account, shopCodes, workerCodes);
+      this.idempotency.run(
+        tx,
+        account.id,
+        dto.operationId,
+        staffMode ? 'STAFF_ATTENDANCE_EMAIL_EXPORT' : 'ATTENDANCE_EMAIL_EXPORT',
+        dto,
+        async () => {
+          const scope = staffMode
+            ? await this.staffAttendanceScope(tx, account, shopCodes, workerCodes)
+            : await this.personalAttendanceScope(tx, account, shopCodes, workerCodes);
 
-        const accountRow = await this.queryAccountEmailName(tx, account.id);
-        if (!accountRow?.email) throw apiError(422, 'Registered email required');
+          const accountRow = await this.queryAccountEmailName(tx, account.id);
+          if (!accountRow?.email) throw apiError(422, 'Registered email required');
 
-        const result = await this.queryExportRecords(tx, scope.workerIds, scope.shopIds, dto.fromDate, dto.toDate, dto.records.map((r) => r.id));
+          const result = await this.queryExportRecords(
+            tx,
+            scope.workerIds,
+            scope.shopIds,
+            dto.fromDate,
+            dto.toDate,
+            dto.records.map((r) => r.id),
+          );
 
-        const versions = new Map(dto.records.map((r) => [r.id, r.version]));
-        if (versions.size !== dto.records.length || result.length !== versions.size || result.some((r) => versions.get(r.id) !== r.version)) {
-          throw apiError(409, 'Records changed; query again before exporting');
-        }
+          const versions = new Map(dto.records.map((r) => [r.id, r.version]));
+          if (
+            versions.size !== dto.records.length ||
+            result.length !== versions.size ||
+            result.some((r) => versions.get(r.id) !== r.version)
+          ) {
+            throw apiError(409, 'Records changed; query again before exporting');
+          }
 
-        const period = dto.fromDate === dto.toDate ? dto.fromDate : `${dto.fromDate} - ${dto.toDate}`;
-        const subject = `Pawhub ${scope.s?.name ?? 'All stores'} ${period} attendence record`.replace(/[\r\n]/g, ' ');
-        const snapshot = {
-          shopId: dto.shopId ?? (dto.shopIds?.length === 1 ? dto.shopIds[0] : null),
-          shopIds: dto.shopIds ?? [],
-          shopName: scope.s?.name ?? 'All stores',
-          fromDate: dto.fromDate,
-          toDate: dto.toDate,
-          workerName: staffMode ? scope.staffName : accountRow.name,
-          workerCode: staffMode ? scope.staffCode : account.login_code,
-          staffMode,
-          dailyHours: this.attendanceDays(result),
-          records: result,
-        };
+          const period = dto.fromDate === dto.toDate ? dto.fromDate : `${dto.fromDate} - ${dto.toDate}`;
+          const subject = `Pawhub ${scope.s?.name ?? 'All stores'} ${period} attendence record`.replace(/[\r\n]/g, ' ');
+          const snapshot = {
+            shopId: dto.shopId ?? (dto.shopIds?.length === 1 ? dto.shopIds[0] : null),
+            shopIds: dto.shopIds ?? [],
+            shopName: scope.s?.name ?? 'All stores',
+            fromDate: dto.fromDate,
+            toDate: dto.toDate,
+            workerName: staffMode ? scope.staffName : accountRow.name,
+            workerCode: staffMode ? scope.staffCode : account.login_code,
+            staffMode,
+            dailyHours: this.attendanceDays(result),
+            records: result,
+          };
 
-        const job = await this.insertExportJob(tx, account.id, accountRow.email as string, subject, snapshot);
-        await this.audit.record(tx, account.id, 'ATTENDANCE_EMAIL_EXPORT', job.id);
+          const job = await this.insertExportJob(tx, account.id, accountRow.email as string, subject, snapshot);
+          await this.audit.record(tx, account.id, 'ATTENDANCE_EMAIL_EXPORT', job.id);
 
-        return { exportId: job.id, status: 'QUEUED', recipientEmail: accountRow.email };
-      }),
+          return { exportId: job.id, status: 'QUEUED', recipientEmail: accountRow.email };
+        },
+      ),
     );
   }
 
   /** Mirrors legacy's `GET /attendance/summary` — a personal work_segments summary. */
-  async personalSummary(account: Account, shopCode: string | undefined, workerCode: string | undefined, range: DateRangeDto): Promise<Record<string, unknown>> {
+  async personalSummary(
+    account: Account,
+    shopCode: string | undefined,
+    workerCode: string | undefined,
+    range: DateRangeDto,
+  ): Promise<Record<string, unknown>> {
     const { worker, shop } = await this.resolveAppScope(this.db, account, shopCode, workerCode || account.login_code);
     const segments = await this.queryPersonalSegments(this.db, worker.id, shop!.id, range.fromDate, range.toDate);
 
@@ -1047,7 +1242,9 @@ export class AttendanceService {
   }
 
   private async queryWorkerIdsForRecords(c: Queryable, recordIds: string[]): Promise<RecordWorkerIdRow[]> {
-    return c.$queryRaw<RecordWorkerIdRow[]>`SELECT worker_id FROM attendance_records WHERE id=ANY(${recordIds}::uuid[])`;
+    return c.$queryRaw<
+      RecordWorkerIdRow[]
+    >`SELECT worker_id FROM attendance_records WHERE id=ANY(${recordIds}::uuid[])`;
   }
 
   private async queryAccountEmailName(c: Queryable, accountId: string): Promise<AccountEmailNameRow | undefined> {
@@ -1089,7 +1286,13 @@ export class AttendanceService {
     return job!;
   }
 
-  private async queryPersonalSegments(c: Queryable, workerId: string, shopId: string, fromDate: string, toDate: string): Promise<PersonalSegmentRow[]> {
+  private async queryPersonalSegments(
+    c: Queryable,
+    workerId: string,
+    shopId: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<PersonalSegmentRow[]> {
     return c.$queryRaw<PersonalSegmentRow[]>`
       SELECT status,issue_code,hrs,start_at,end_at FROM work_segments
       WHERE worker_id=${workerId}::uuid AND shop_id=${shopId}::uuid AND (start_at AT TIME ZONE ${ATTENDANCE_ZONE})::date BETWEEN ${fromDate}::date AND ${toDate}::date`;
@@ -1118,13 +1321,26 @@ export class AttendanceService {
     }
 
     if (
-      codes.some((code) => !available.some((r) => r.login_code === code || code === '__worker__' + r.id || (code === '__self__' && r.account_id === actor.id)))
+      codes.some(
+        (code) =>
+          !available.some(
+            (r) =>
+              r.login_code === code ||
+              code === '__worker__' + r.id ||
+              (code === '__self__' && r.account_id === actor.id),
+          ),
+      )
     ) {
       throw apiError(403, 'Staff outside your managed groomers');
     }
 
     const staff = codes.length
-      ? available.filter((r) => codes.includes(r.login_code ?? '') || codes.includes('__worker__' + r.id) || (codes.includes('__self__') && r.account_id === actor.id))
+      ? available.filter(
+          (r) =>
+            codes.includes(r.login_code ?? '') ||
+            codes.includes('__worker__' + r.id) ||
+            (codes.includes('__self__') && r.account_id === actor.id),
+        )
       : available.filter((r) => includeDeleted || r.status === 'ACTIVE');
 
     const stores = await this.attendanceStores(c, shopCodesValue);
@@ -1138,12 +1354,23 @@ export class AttendanceService {
   }
 
   /** Mirrors legacy's `personalAttendanceScope()` — a personal-app request scoped to the caller's own records. */
-  async personalAttendanceScope(c: Queryable, account: Account, shopCodesValue: CodeQueryValue, workerCodesValue: CodeQueryValue): Promise<AttendanceScope> {
+  async personalAttendanceScope(
+    c: Queryable,
+    account: Account,
+    shopCodesValue: CodeQueryValue,
+    workerCodesValue: CodeQueryValue,
+  ): Promise<AttendanceScope> {
     const codes = this.selectedCodes(workerCodesValue, WORKER_CODE_PATTERN);
     if (codes.length > 1) throw apiError(403, 'Only your own records');
 
     const shops = this.selectedCodes(shopCodesValue, SHOP_CODE_PATTERN);
-    const { worker } = await this.resolveAppScope(c, account, account.role === 'SHOP' ? shops[0] : null, codes[0] || account.login_code, true);
+    const { worker } = await this.resolveAppScope(
+      c,
+      account,
+      account.role === 'SHOP' ? shops[0] : null,
+      codes[0] || account.login_code,
+      true,
+    );
     const stores = await this.attendanceStores(c, shops);
 
     if (account.role === 'SHOP') for (const id of stores.shopIds ?? []) await this.scope.assertShop(c, account, id);
@@ -1152,14 +1379,20 @@ export class AttendanceService {
   }
 
   /** Mirrors legacy's `attendanceStores()`. */
-  async attendanceStores(c: Queryable, value: CodeQueryValue): Promise<{ shopIds: string[] | null; s: { name: string; id: string | null } | null }> {
+  async attendanceStores(
+    c: Queryable,
+    value: CodeQueryValue,
+  ): Promise<{ shopIds: string[] | null; s: { name: string; id: string | null } | null }> {
     const codes = this.selectedCodes(value, SHOP_CODE_PATTERN);
     if (!codes.length) return { shopIds: null, s: null };
 
     const rows = await this.queryShopsByLoginCodes(c, codes);
     if (rows.length !== codes.length) throw apiError(422, 'Unknown store');
 
-    return { shopIds: rows.map((r) => r.id), s: { name: rows.map((r) => r.name).join(', '), id: rows.length === 1 ? rows[0]!.id : null } };
+    return {
+      shopIds: rows.map((r) => r.id),
+      s: { name: rows.map((r) => r.name).join(', '), id: rows.length === 1 ? rows[0]!.id : null },
+    };
   }
 
   private attendanceDays(records: AttendanceListingRow[]): AttendanceDaySummary[] {
@@ -1182,7 +1415,12 @@ export class AttendanceService {
           shopName: rows[0]!.shop_name,
         })),
       )
-      .sort((a, b) => a.date.localeCompare(b.date) || a.workerName.localeCompare(b.workerName) || a.shopName.localeCompare(b.shopName));
+      .sort(
+        (a, b) =>
+          a.date.localeCompare(b.date) ||
+          a.workerName.localeCompare(b.workerName) ||
+          a.shopName.localeCompare(b.shopName),
+      );
   }
 
   /** Mirrors legacy's `selectedCodes()` — parses a comma-joined or repeated query value into a deduped, pattern-validated code list. */
@@ -1197,7 +1435,10 @@ export class AttendanceService {
   }
 
   private checkRangeWithinAMonth(range: DateRangeDto): void {
-    if (range.fromDate > range.toDate || new Date(range.toDate).getTime() - new Date(range.fromDate).getTime() > 30 * 86400000) {
+    if (
+      range.fromDate > range.toDate ||
+      new Date(range.toDate).getTime() - new Date(range.fromDate).getTime() > 30 * 86400000
+    ) {
       throw apiError(422, 'Date range must be within 31 days');
     }
   }
@@ -1225,7 +1466,9 @@ export class AttendanceService {
   }
 
   private async queryShopsByLoginCodes(c: Queryable, codes: string[]): Promise<StoreRow[]> {
-    return c.$queryRaw<StoreRow[]>`SELECT s.id,s.name FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=ANY(${codes}::text[]) ORDER BY s.name`;
+    return c.$queryRaw<
+      StoreRow[]
+    >`SELECT s.id,s.name FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=ANY(${codes}::text[]) ORDER BY s.name`;
   }
 
   private async queryStaffListing(c: Queryable, role: string, accountId: string): Promise<StaffListingRow[]> {
@@ -1238,7 +1481,13 @@ export class AttendanceService {
       ORDER BY a.name`;
   }
 
-  private async queryAttendanceListing(c: Queryable, workerIds: string[], shopIds: string[] | null, fromDate: string, toDate: string): Promise<AttendanceListingRow[]> {
+  private async queryAttendanceListing(
+    c: Queryable,
+    workerIds: string[],
+    shopIds: string[] | null,
+    fromDate: string,
+    toDate: string,
+  ): Promise<AttendanceListingRow[]> {
     return c.$queryRaw<AttendanceListingRow[]>`
       SELECT r.*,wa.name AS worker_name,wa.login_code AS worker_code,sh.name AS shop_name,sa.login_code AS shop_code,
         (SELECT x.after_type FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING' LIMIT 1) AS pending_sign_type,
@@ -1251,7 +1500,13 @@ export class AttendanceService {
       ORDER BY effective_occurred_at,id`;
   }
 
-  private async queryLocations(c: Queryable, workerIds: string[], shopIds: string[] | null, fromDate: string, toDate: string): Promise<LocationRow[]> {
+  private async queryLocations(
+    c: Queryable,
+    workerIds: string[],
+    shopIds: string[] | null,
+    fromDate: string,
+    toDate: string,
+  ): Promise<LocationRow[]> {
     return c.$queryRaw<LocationRow[]>`
       SELECT r.id,r.photo_id,r.worker_id,r.shop_id,r.original_occurred_at,r.effective_occurred_at,r.confirmed_occurred_at,r.manager_confirmed,r.sign_type,r.location,
         wa.name AS worker_name,wa.login_code AS worker_code,s.name AS shop_name,s.latitude AS shop_latitude,s.longitude AS shop_longitude
@@ -1324,7 +1579,12 @@ export class AttendanceService {
   }
 
   /** Mirrors legacy's `scopeSql` (narrower than `recordScopeSql` — no `manager_workers` fallback) used to resolve `reports/pdf`'s `scopeIds`. */
-  private async queryReportScopeShopIds(c: Queryable, role: string, accountId: string, shopCode: string | null): Promise<ReportScopeShopIdRow[]> {
+  private async queryReportScopeShopIds(
+    c: Queryable,
+    role: string,
+    accountId: string,
+    shopCode: string | null,
+  ): Promise<ReportScopeShopIdRow[]> {
     return c.$queryRaw<ReportScopeShopIdRow[]>`
       SELECT s.id FROM shops s JOIN accounts sa ON sa.id=s.account_id
       WHERE (${role} IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=${accountId}::uuid))
@@ -1340,7 +1600,8 @@ export class AttendanceService {
   ): Promise<void> {
     const day = localDate(occurredAt);
     const count = await this.dailyAttendanceCount(tx, workerId, shopId, day);
-    if (day !== localDate(new Date()) || count !== expectedDailyCount) throw apiError(409, "Attendance changed; refresh today's status", 'ATTENDANCE_CHANGED');
+    if (day !== localDate(new Date()) || count !== expectedDailyCount)
+      throw apiError(409, "Attendance changed; refresh today's status", 'ATTENDANCE_CHANGED');
   }
 
   private async checkPhoto(tx: Prisma.TransactionClient, account: Account, dto: ClockDto): Promise<void> {
@@ -1362,7 +1623,9 @@ export class AttendanceService {
     const shopLatitude = Number(shop.latitude);
     const shopLongitude = Number(shop.longitude);
     const rad = (n: number): number => (n * Math.PI) / 180;
-    const h = Math.sin(rad(lat - shopLatitude) / 2) ** 2 + Math.cos(rad(lat)) * Math.cos(rad(shopLatitude)) * Math.sin(rad(lon - shopLongitude) / 2) ** 2;
+    const h =
+      Math.sin(rad(lat - shopLatitude) / 2) ** 2 +
+      Math.cos(rad(lat)) * Math.cos(rad(shopLatitude)) * Math.sin(rad(lon - shopLongitude) / 2) ** 2;
     const distance = 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
 
     return {
@@ -1374,11 +1637,20 @@ export class AttendanceService {
     };
   }
 
-  private async ensureWorkerRow(c: Queryable, accountId: string, contact: string | null, address: string | null): Promise<void> {
+  private async ensureWorkerRow(
+    c: Queryable,
+    accountId: string,
+    contact: string | null,
+    address: string | null,
+  ): Promise<void> {
     await c.$executeRaw`INSERT INTO workers(account_id,contact,address) VALUES(${accountId}::uuid,${contact},${address}) ON CONFLICT(account_id) DO NOTHING`;
   }
 
-  private async queryAppScopeWorker(c: Queryable, workerCode: string | null, accountId: string): Promise<AppScopeWorkerRow | undefined> {
+  private async queryAppScopeWorker(
+    c: Queryable,
+    workerCode: string | null,
+    accountId: string,
+  ): Promise<AppScopeWorkerRow | undefined> {
     const [worker] = await c.$queryRaw<AppScopeWorkerRow[]>`
       SELECT w.id,w.account_id,a.status AS account_status FROM workers w JOIN accounts a ON a.id=w.account_id
       WHERE (${workerCode}::text IS NOT NULL AND a.login_code=${workerCode})
@@ -1387,11 +1659,16 @@ export class AttendanceService {
   }
 
   private async queryAppScopeShop(c: Queryable, shopCode: string): Promise<AppScopeShopRow | undefined> {
-    const [shop] = await c.$queryRaw<AppScopeShopRow[]>`SELECT s.id,s.name,s.latitude,s.longitude FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${shopCode}`;
+    const [shop] = await c.$queryRaw<
+      AppScopeShopRow[]
+    >`SELECT s.id,s.name,s.latitude,s.longitude FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${shopCode}`;
     return shop;
   }
 
-  private async lockActiveWorkerByCode(tx: Prisma.TransactionClient, workerCode: string): Promise<ClockWorkerRow | undefined> {
+  private async lockActiveWorkerByCode(
+    tx: Prisma.TransactionClient,
+    workerCode: string,
+  ): Promise<ClockWorkerRow | undefined> {
     const [worker] = await tx.$queryRaw<ClockWorkerRow[]>`
       SELECT w.id,a.id AS account_id FROM workers w JOIN accounts a ON a.id=w.account_id
       WHERE a.login_code=${workerCode} AND a.status='ACTIVE' FOR UPDATE OF w`;
@@ -1399,12 +1676,16 @@ export class AttendanceService {
   }
 
   private async shopByCode(tx: Prisma.TransactionClient, shopCode: string): Promise<ClockShopRow | undefined> {
-    const [shop] = await tx.$queryRaw<ClockShopRow[]>`SELECT s.id,s.name,s.latitude,s.longitude FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${shopCode}`;
+    const [shop] = await tx.$queryRaw<
+      ClockShopRow[]
+    >`SELECT s.id,s.name,s.latitude,s.longitude FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${shopCode}`;
     return shop;
   }
 
   private async queryReadyPhoto(tx: Prisma.TransactionClient, photoId: string, accountId: string): Promise<boolean> {
-    const rows = await tx.$queryRaw<{ exists: true }[]>`SELECT 1 AS exists FROM photos WHERE id=${photoId}::uuid AND uploaded_by_account_id=${accountId}::uuid AND status='READY'`;
+    const rows = await tx.$queryRaw<
+      { exists: true }[]
+    >`SELECT 1 AS exists FROM photos WHERE id=${photoId}::uuid AND uploaded_by_account_id=${accountId}::uuid AND status='READY'`;
     return rows.length > 0;
   }
 
@@ -1424,7 +1705,7 @@ export class AttendanceService {
     position: LocationPosition,
   ): Promise<AttendanceRecordRow> {
     const source = account.role === 'SHOP' ? 'SHOP_DEVICE' : 'PERSONAL_APP';
-    const plannedStartAt = first ? dto.plannedStartAt ?? null : null;
+    const plannedStartAt = first ? (dto.plannedStartAt ?? null) : null;
 
     const [record] = await tx.$queryRaw<AttendanceRecordRow[]>`
       INSERT INTO attendance_records(worker_id,shop_id,submitted_by_account_id,sign_type,source,original_occurred_at,planned_start_at,effective_occurred_at,confirmed_occurred_at,offline,camera_status,photo_id,location)
@@ -1433,12 +1714,22 @@ export class AttendanceService {
     return record!;
   }
 
-  private async queryDailyAttendanceCount(c: Queryable, workerId: string, shopId: string, day: string): Promise<{ count: number }[]> {
+  private async queryDailyAttendanceCount(
+    c: Queryable,
+    workerId: string,
+    shopId: string,
+    day: string,
+  ): Promise<{ count: number }[]> {
     return c.$queryRaw<{ count: number }[]>`
       SELECT count(*)::int AS count FROM attendance_records WHERE worker_id=${workerId}::uuid AND shop_id=${shopId}::uuid AND NOT effective_deleted AND (effective_occurred_at AT TIME ZONE ${ATTENDANCE_ZONE})::date=${day}::date`;
   }
 
-  private async latestRecordToday(c: Queryable, workerId: string, shopId: string, day: string): Promise<{ id: string } | undefined> {
+  private async latestRecordToday(
+    c: Queryable,
+    workerId: string,
+    shopId: string,
+    day: string,
+  ): Promise<{ id: string } | undefined> {
     const [record] = await c.$queryRaw<{ id: string }[]>`
       SELECT id FROM attendance_records WHERE worker_id=${workerId}::uuid AND shop_id=${shopId}::uuid AND NOT effective_deleted AND (effective_occurred_at AT TIME ZONE ${ATTENDANCE_ZONE})::date=${day}::date
       ORDER BY effective_occurred_at DESC,id DESC LIMIT 1`;
@@ -1484,7 +1775,17 @@ export class AttendanceService {
     }
 
     const shopId = signIn?.shop_id ?? signOut!.shop_id;
-    await this.insertWorkSegmentRow(tx, workerId, shopId, signIn?.id ?? null, signOut?.id ?? null, start, end, status, issue);
+    await this.insertWorkSegmentRow(
+      tx,
+      workerId,
+      shopId,
+      signIn?.id ?? null,
+      signOut?.id ?? null,
+      start,
+      end,
+      status,
+      issue,
+    );
   }
 
   private async insertWorkSegmentRow(

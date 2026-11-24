@@ -69,8 +69,11 @@ export class MailService {
           return;
         }
 
-        const label = payload.role === 'GENERAL_MANAGER' ? 'General manager' : payload.role === 'MANAGER' ? 'Manager' : 'Groomer';
-        subject = 'Pawhub registration confirmed' + (payload.employeeCode ? ' - employee ID ' + payload.employeeCode : ' - ' + label);
+        const label =
+          payload.role === 'GENERAL_MANAGER' ? 'General manager' : payload.role === 'MANAGER' ? 'Manager' : 'Groomer';
+        subject =
+          'Pawhub registration confirmed' +
+          (payload.employeeCode ? ' - employee ID ' + payload.employeeCode : ' - ' + label);
         text = `Hello ${payload.name},\nYour Pawhub registration has been approved.\nRole: ${label}\n${
           payload.employeeCode ? 'Your employee ID: ' + payload.employeeCode + '\n' : ''
         }Sign in with your registered email and the password you already set.\n\n您的注册已确认，账号已激活。\n角色：${label}\n${
@@ -92,7 +95,8 @@ export class MailService {
         disableFileAccess: true,
         disableUrlAccess: true,
       });
-      await this.db.$executeRaw`UPDATE email_jobs SET status='SENT',sent_at=now(),encrypted_payload=NULL WHERE id=${job.id}::uuid`;
+      await this.db
+        .$executeRaw`UPDATE email_jobs SET status='SENT',sent_at=now(),encrypted_payload=NULL WHERE id=${job.id}::uuid`;
     } catch (e) {
       const err = e as { code?: string; name?: string };
       const status = job.attempt_count >= 4 ? 'FAILED' : 'QUEUED';
@@ -120,7 +124,9 @@ export class MailService {
   }
 
   private async passwordLinkStillValid(passwordLinkId: string | null): Promise<boolean> {
-    const [link] = await this.db.$queryRaw<PasswordLinkRow[]>`SELECT * FROM password_links WHERE id=${passwordLinkId}::uuid`;
+    const [link] = await this.db.$queryRaw<
+      PasswordLinkRow[]
+    >`SELECT * FROM password_links WHERE id=${passwordLinkId}::uuid`;
     return !!link && !link.used_at && !link.revoked_at && new Date(link.expires_at) > new Date();
   }
 

@@ -15,7 +15,10 @@ export class ManagerAttendanceAdjustmentsController {
   constructor(private readonly attendance: AttendanceService) {}
 
   @Post()
-  async submit(@CurrentAccount() account: Account, @Body({ schema: adjustmentSchema }) dto: AdjustmentDto): Promise<{ data: unknown }> {
+  async submit(
+    @CurrentAccount() account: Account,
+    @Body({ schema: adjustmentSchema }) dto: AdjustmentDto,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.submitAdjustment(account, true, dto) };
   }
 }

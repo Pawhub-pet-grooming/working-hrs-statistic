@@ -19,7 +19,10 @@ export async function createApp(options: { logger?: boolean } = {}): Promise<Nes
     new StandardSchemaValidationPipe({
       errorHttpStatusCode: 422,
       exceptionFactory: (issues) =>
-        new HttpException({ error: { code: 'VALIDATION_ERROR', message: 'Invalid request fields', fields: issues } }, 422),
+        new HttpException(
+          { error: { code: 'VALIDATION_ERROR', message: 'Invalid request fields', fields: issues } },
+          422,
+        ),
     }),
   );
   app.useGlobalFilters(new HttpErrorFilter());

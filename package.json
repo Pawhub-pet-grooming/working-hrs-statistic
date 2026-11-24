@@ -10,6 +10,7 @@
     "build": "npm run build -w web && npm run build -w server-nest",
     "pretest": "npm run build -w server-nest",
     "test": "npm test -w server",
+    "lint": "npm run lint -w server-nest",
     "dev:api": "npm run start:dev -w server-nest",
     "dev:web": "npm run dev -w web"
   },

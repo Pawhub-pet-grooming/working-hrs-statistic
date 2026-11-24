@@ -35,7 +35,9 @@ describe('HttpErrorFilter', () => {
     filter.catch(new Error('unexpected'), host);
 
     expect(status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
-    expect(json).toHaveBeenCalledWith({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error', fields: [] } });
+    expect(json).toHaveBeenCalledWith({
+      error: { code: 'INTERNAL_ERROR', message: 'Internal server error', fields: [] },
+    });
     expect(error).toHaveBeenCalledTimes(1);
   });
 

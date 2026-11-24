@@ -135,7 +135,9 @@ export class AccountsService {
         });
 
         if (shopIds.length) {
-          await tx.account_shops.createMany({ data: shopIds.map((shopId) => ({ account_id: created.id, shop_id: shopId })) });
+          await tx.account_shops.createMany({
+            data: shopIds.map((shopId) => ({ account_id: created.id, shop_id: shopId })),
+          });
         }
 
         if (!isManager && account.role === 'MANAGER') {
@@ -160,12 +162,17 @@ export class AccountsService {
     );
   }
 
-  async updateManagedProfile(account: Account, accountId: string, dto: ManagedProfileDto): Promise<Record<string, unknown>> {
+  async updateManagedProfile(
+    account: Account,
+    accountId: string,
+    dto: ManagedProfileDto,
+  ): Promise<Record<string, unknown>> {
     return this.db.$transaction((tx) =>
       this.idempotency.run(tx, account.id, dto.operationId, 'MANAGED_PROFILE', { ...dto, accountId }, async () => {
         const person = await this.managedPerson(tx, account, accountId);
         if (person.status === 'DISABLED') throw apiError(409, 'Account has been deleted');
-        if (person.profile_version !== dto.expectedVersion) throw apiError(409, 'Profile changed; reload before saving', 'PROFILE_CHANGED');
+        if (person.profile_version !== dto.expectedVersion)
+          throw apiError(409, 'Profile changed; reload before saving', 'PROFILE_CHANGED');
 
         let preferred: { id: string } | null = null;
         if (dto.preferredShopId) {
@@ -188,7 +195,10 @@ export class AccountsService {
           },
         });
 
-        await tx.workers.updateMany({ where: { account_id: accountId }, data: { address: dto.address, contact: dto.phone } });
+        await tx.workers.updateMany({
+          where: { account_id: accountId },
+          data: { address: dto.address, contact: dto.phone },
+        });
 
         await this.audit.record(
           tx,
@@ -218,9 +228,18 @@ export class AccountsService {
           throw apiError(409, 'Account changed; reload');
         }
 
-        await tx.accounts.update({ where: { id: accountId }, data: { status: 'DISABLED', profile_version: { increment: 1 } } });
-        await tx.sessions.updateMany({ where: { account_id: accountId, revoked_at: null }, data: { revoked_at: new Date() } });
-        await tx.password_links.updateMany({ where: { account_id: accountId, used_at: null }, data: { revoked_at: new Date() } });
+        await tx.accounts.update({
+          where: { id: accountId },
+          data: { status: 'DISABLED', profile_version: { increment: 1 } },
+        });
+        await tx.sessions.updateMany({
+          where: { account_id: accountId, revoked_at: null },
+          data: { revoked_at: new Date() },
+        });
+        await tx.password_links.updateMany({
+          where: { account_id: accountId, used_at: null },
+          data: { revoked_at: new Date() },
+        });
 
         await tx.email_jobs.updateMany({
           where: { account_id: accountId, status: { in: ['QUEUED', 'FAILED'] } },
@@ -232,7 +251,14 @@ export class AccountsService {
           data: { status: 'FAILED', last_error_code: 'ACCOUNT_DISABLED' },
         });
 
-        await this.audit.record(tx, account.id, 'PERSON_REMOVED', accountId, { status: person.status }, { status: 'DISABLED' });
+        await this.audit.record(
+          tx,
+          account.id,
+          'PERSON_REMOVED',
+          accountId,
+          { status: person.status },
+          { status: 'DISABLED' },
+        );
 
         return { accountId, status: 'DISABLED' };
       }),
@@ -244,7 +270,8 @@ export class AccountsService {
       this.idempotency.run(tx, account.id, dto.operationId, 'ACCOUNT_APPROVAL', { ...dto, accountId }, async () => {
         const [target] = await this.queryAccountForUpdate(tx, accountId);
         if (!target || !['WORKER', 'MANAGER'].includes(target.role)) throw apiError(404, 'Personnel account missing');
-        if (target.status !== 'PENDING' || !target.requires_manager_approval) throw apiError(409, 'Account is not awaiting approval');
+        if (target.status !== 'PENDING' || !target.requires_manager_approval)
+          throw apiError(409, 'Account is not awaiting approval');
         if (!target.password_hash) throw apiError(409, 'Employee must set a password first');
 
         const employeeCode =
@@ -252,7 +279,12 @@ export class AccountsService {
 
         await tx.accounts.update({
           where: { id: accountId },
-          data: { status: 'ACTIVE', login_code: employeeCode, approved_by_account_id: account.id, approved_at: new Date() },
+          data: {
+            status: 'ACTIVE',
+            login_code: employeeCode,
+            approved_by_account_id: account.id,
+            approved_at: new Date(),
+          },
         });
 
         await tx.email_jobs.create({
@@ -281,7 +313,11 @@ export class AccountsService {
     );
   }
 
-  async resendInvitation(account: Account, accountId: string, dto: ResendInvitationDto): Promise<Record<string, unknown>> {
+  async resendInvitation(
+    account: Account,
+    accountId: string,
+    dto: ResendInvitationDto,
+  ): Promise<Record<string, unknown>> {
     return this.db.$transaction((tx) =>
       this.idempotency.run(tx, account.id, dto.operationId, 'INVITATION', { ...dto, accountId }, async () => {
         const [target] = await this.queryAccountForUpdate(tx, accountId);
@@ -303,7 +339,8 @@ export class AccountsService {
   private async managedPerson(tx: Prisma.TransactionClient, actor: Account, accountId: string): Promise<Account> {
     const [person] = await this.queryAccountForUpdate(tx, accountId);
     if (!person || !['WORKER', 'MANAGER'].includes(person.role)) throw apiError(404, 'Person not found');
-    if (person.role === 'MANAGER' && !this.scope.isCompanyAdmin(actor)) throw apiError(403, 'Only owner can manage managers');
+    if (person.role === 'MANAGER' && !this.scope.isCompanyAdmin(actor))
+      throw apiError(403, 'Only owner can manage managers');
 
     if (person.role === 'WORKER') {
       const worker = await this.queryWorkerIdByAccount(tx, person.id);

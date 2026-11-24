@@ -31,13 +31,19 @@ export class StaffAttendanceController {
   }
 
   @Get('staff')
-  async listStaff(@CurrentAccount() account: Account, @Query({ schema: staffListingQuerySchema }) query: StaffListingQueryDto): Promise<{ data: unknown }> {
+  async listStaff(
+    @CurrentAccount() account: Account,
+    @Query({ schema: staffListingQuerySchema }) query: StaffListingQueryDto,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.listStaff(account, query.includeDeleted === 'true') };
   }
 
   @Post('exports')
   @HttpCode(202)
-  async exportRecords(@CurrentAccount() account: Account, @Body({ schema: exportSchema }) dto: ExportDto): Promise<{ data: unknown }> {
+  async exportRecords(
+    @CurrentAccount() account: Account,
+    @Body({ schema: exportSchema }) dto: ExportDto,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.exportRecords(account, true, dto) };
   }
 }

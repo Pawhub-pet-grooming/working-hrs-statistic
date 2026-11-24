@@ -45,7 +45,10 @@ export class ManagerAttendanceController {
   }
 
   @Get(':id/history')
-  async history(@CurrentAccount() account: Account, @Param('id', { schema: recordIdParamSchema }) id: string): Promise<{ data: unknown }> {
+  async history(
+    @CurrentAccount() account: Account,
+    @Param('id', { schema: recordIdParamSchema }) id: string,
+  ): Promise<{ data: unknown }> {
     return { data: await this.attendance.getHistory(account, id) };
   }
 

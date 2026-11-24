@@ -61,7 +61,10 @@ export class AuthService {
       for (const account of rows) {
         const eligible =
           account.status === 'ACTIVE' ||
-          (!isManager && account.role === 'WORKER' && account.status === 'PENDING' && account.requires_manager_approval);
+          (!isManager &&
+            account.role === 'WORKER' &&
+            account.status === 'PENDING' &&
+            account.requires_manager_approval);
         if (eligible && (await passwordMatches(account, dto.password))) matches.push(account);
       }
 
@@ -173,10 +176,17 @@ export class AuthService {
       if (!current.password_hash || !(await argon2.verify(current.password_hash, dto.currentPassword))) {
         throw apiError(422, 'Current password is incorrect', 'CURRENT_PASSWORD_INCORRECT');
       }
-      if (dto.currentPassword === dto.newPassword) throw apiError(422, 'Choose a different password', 'PASSWORD_UNCHANGED');
+      if (dto.currentPassword === dto.newPassword)
+        throw apiError(422, 'Choose a different password', 'PASSWORD_UNCHANGED');
 
-      await tx.accounts.update({ where: { id: account.id }, data: { password_hash: await argon2.hash(dto.newPassword) } });
-      await tx.sessions.updateMany({ where: { account_id: account.id, revoked_at: null }, data: { revoked_at: new Date() } });
+      await tx.accounts.update({
+        where: { id: account.id },
+        data: { password_hash: await argon2.hash(dto.newPassword) },
+      });
+      await tx.sessions.updateMany({
+        where: { account_id: account.id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
 
       await tx.password_links.updateMany({
         where: { account_id: account.id, used_at: null, revoked_at: null },
@@ -188,7 +198,11 @@ export class AuthService {
   }
 
   /** Also used by OrganizationModule's account-creation/invitation-resend routes. */
-  async invite(tx: Prisma.TransactionClient, account: Account, purpose: 'FIRST_SETUP' | 'PASSWORD_RESET'): Promise<string> {
+  async invite(
+    tx: Prisma.TransactionClient,
+    account: Account,
+    purpose: 'FIRST_SETUP' | 'PASSWORD_RESET',
+  ): Promise<string> {
     const t = newToken();
 
     await tx.password_links.updateMany({
@@ -210,7 +224,10 @@ export class AuthService {
       },
     });
 
-    const payload = encryptMailPayload({ token: t, name: account.name }, this.config.get('MAIL_ENCRYPTION_KEY', { infer: true }));
+    const payload = encryptMailPayload(
+      { token: t, name: account.name },
+      this.config.get('MAIL_ENCRYPTION_KEY', { infer: true }),
+    );
 
     await tx.email_jobs.create({
       data: {
@@ -232,18 +249,28 @@ export class AuthService {
   ): Promise<Account[]> {
     return isManager
       ? emailParam
-        ? tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE lower(email)=${emailParam} AND role IN('MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE`
-        : tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE login_code=${accountId} AND role IN('MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE`
+        ? tx.$queryRaw<
+            Account[]
+          >`SELECT * FROM accounts WHERE lower(email)=${emailParam} AND role IN('MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE`
+        : tx.$queryRaw<
+            Account[]
+          >`SELECT * FROM accounts WHERE login_code=${accountId} AND role IN('MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE`
       : emailParam
-        ? tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE lower(email)=${emailParam} AND role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE`
-        : tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE login_code=${accountId} AND role IN('SHOP','WORKER','MANAGER','GENERAL_MANAGER') FOR SHARE`;
+        ? tx.$queryRaw<
+            Account[]
+          >`SELECT * FROM accounts WHERE lower(email)=${emailParam} AND role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER') ORDER BY id FOR SHARE`
+        : tx.$queryRaw<
+            Account[]
+          >`SELECT * FROM accounts WHERE login_code=${accountId} AND role IN('SHOP','WORKER','MANAGER','GENERAL_MANAGER') FOR SHARE`;
   }
 
   private async queryPreferredShopLoginCode(
     tx: Prisma.TransactionClient,
     shopId: string,
   ): Promise<{ login_code: string }[]> {
-    return tx.$queryRaw<{ login_code: string }[]>`SELECT sa.login_code FROM shops s JOIN accounts sa ON sa.id = s.account_id WHERE s.id = ${shopId}`;
+    return tx.$queryRaw<
+      { login_code: string }[]
+    >`SELECT sa.login_code FROM shops s JOIN accounts sa ON sa.id = s.account_id WHERE s.id = ${shopId}`;
   }
 
   private async lockEmployeeCodeAllocation(tx: Prisma.TransactionClient): Promise<void> {
@@ -255,7 +282,9 @@ export class AuthService {
   }
 
   private async queryRecentFirstSetupLink(tx: Prisma.TransactionClient, accountId: string): Promise<unknown[]> {
-    return tx.$queryRaw<unknown[]>`SELECT 1 FROM password_links WHERE account_id = ${accountId} AND purpose = 'FIRST_SETUP' AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() + interval '6 days 23 hours 55 minutes'`;
+    return tx.$queryRaw<
+      unknown[]
+    >`SELECT 1 FROM password_links WHERE account_id = ${accountId} AND purpose = 'FIRST_SETUP' AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() + interval '6 days 23 hours 55 minutes'`;
   }
 
   private async queryPasswordResetCandidates(
@@ -264,12 +293,18 @@ export class AuthService {
     email: string | undefined,
   ): Promise<Account[]> {
     return accountId
-      ? tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE login_code = ${accountId} AND role IN('WORKER','MANAGER','GENERAL_MANAGER') AND status = 'ACTIVE' ORDER BY id FOR UPDATE`
-      : tx.$queryRaw<Account[]>`SELECT * FROM accounts WHERE lower(email) = ${email} AND role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER') AND status = 'ACTIVE' ORDER BY id FOR UPDATE`;
+      ? tx.$queryRaw<
+          Account[]
+        >`SELECT * FROM accounts WHERE login_code = ${accountId} AND role IN('WORKER','MANAGER','GENERAL_MANAGER') AND status = 'ACTIVE' ORDER BY id FOR UPDATE`
+      : tx.$queryRaw<
+          Account[]
+        >`SELECT * FROM accounts WHERE lower(email) = ${email} AND role IN('WORKER','MANAGER','GENERAL_MANAGER','SUPER_MANAGER') AND status = 'ACTIVE' ORDER BY id FOR UPDATE`;
   }
 
   private async queryPasswordLinkByToken(tx: Prisma.TransactionClient, tokenHash: string): Promise<PasswordLinkRow[]> {
-    return tx.$queryRaw<PasswordLinkRow[]>`SELECT p.*, a.status, a.requires_manager_approval, a.approved_at FROM password_links p JOIN accounts a ON a.id = p.account_id WHERE p.token_hash = ${tokenHash} FOR UPDATE OF p, a`;
+    return tx.$queryRaw<
+      PasswordLinkRow[]
+    >`SELECT p.*, a.status, a.requires_manager_approval, a.approved_at FROM password_links p JOIN accounts a ON a.id = p.account_id WHERE p.token_hash = ${tokenHash} FOR UPDATE OF p, a`;
   }
 
   private async queryAccountForUpdate(tx: Prisma.TransactionClient, accountId: string): Promise<Account[]> {

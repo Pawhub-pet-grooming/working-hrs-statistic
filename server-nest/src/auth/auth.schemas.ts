@@ -2,7 +2,10 @@ import { z } from 'zod';
 
 const accountId = z.string().regex(/^\d{4}$/);
 const email = z.email();
-const registerEmail = z.email().max(254).transform((v) => v.toLowerCase());
+const registerEmail = z
+  .email()
+  .max(254)
+  .transform((v) => v.toLowerCase());
 
 export const loginSchema = z
   .object({ password: z.string().min(1), email: email.optional(), accountId: accountId.optional() })

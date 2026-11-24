@@ -38,7 +38,9 @@ describe('LoggingInterceptor', () => {
   it('warns with the error message instead of logging a success line when the handler throws', async () => {
     const context = contextWithRequest('POST', '/api/v1/attendance', 0);
 
-    await expect(lastValueFrom(interceptor.intercept(context, handlerReturning(new Error('boom'), true)))).rejects.toThrow('boom');
+    await expect(
+      lastValueFrom(interceptor.intercept(context, handlerReturning(new Error('boom'), true))),
+    ).rejects.toThrow('boom');
 
     expect(log).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(1);
@@ -48,7 +50,9 @@ describe('LoggingInterceptor', () => {
   it('stringifies a non-Error throw rather than crashing the logger', async () => {
     const context = contextWithRequest('POST', '/api/v1/attendance', 0);
 
-    await expect(lastValueFrom(interceptor.intercept(context, handlerReturning('not an Error', true)))).rejects.toBe('not an Error');
+    await expect(lastValueFrom(interceptor.intercept(context, handlerReturning('not an Error', true)))).rejects.toBe(
+      'not an Error',
+    );
 
     expect(warn.mock.calls[0]![0]).toMatch(/failed after \d+ms: not an Error$/);
   });

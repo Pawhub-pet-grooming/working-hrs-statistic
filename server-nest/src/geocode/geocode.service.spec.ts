@@ -55,14 +55,20 @@ describe('GeocodeService', () => {
   it('rejects with GEOCODING_UNAVAILABLE on a provider error', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
     const promise = service.geocodeAddress('provider error');
-    await expect(promise).rejects.toMatchObject({ status: 503, response: { error: { code: 'GEOCODING_UNAVAILABLE' } } });
+    await expect(promise).rejects.toMatchObject({
+      status: 503,
+      response: { error: { code: 'GEOCODING_UNAVAILABLE' } },
+    });
     fetchMock.mockRestore();
   });
 
   it('rejects with GEOCODING_UNAVAILABLE on a timeout', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new DOMException('Timed out', 'TimeoutError'));
     const promise = service.geocodeAddress('timeout');
-    await expect(promise).rejects.toMatchObject({ status: 503, response: { error: { code: 'GEOCODING_UNAVAILABLE' } } });
+    await expect(promise).rejects.toMatchObject({
+      status: 503,
+      response: { error: { code: 'GEOCODING_UNAVAILABLE' } },
+    });
     fetchMock.mockRestore();
   });
 });

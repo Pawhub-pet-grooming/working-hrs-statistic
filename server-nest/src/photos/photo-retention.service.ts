@@ -70,7 +70,8 @@ export class PhotoRetentionService {
               if ((error as { code?: string }).code !== 'ENOENT') throw error;
             }
           } else {
-            if (!bucket) throw Object.assign(new Error('Photo bucket not configured'), { code: 'PHOTO_BUCKET_MISSING' });
+            if (!bucket)
+              throw Object.assign(new Error('Photo bucket not configured'), { code: 'PHOTO_BUCKET_MISSING' });
             await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: photo.storage_key }));
           }
 

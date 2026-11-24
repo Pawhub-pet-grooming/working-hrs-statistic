@@ -12,6 +12,7 @@ const LOCAL_PHOTO_KEY_PATTERN = /^local:photos\/[a-f0-9-]{36}\/[a-f0-9-]{36}\.(j
  */
 export function localPhotoPath(key: string): string {
   if (!LOCAL_PHOTO_KEY_PATTERN.test(key)) throw apiError(422, 'Invalid photo storage key', 'INVALID_PHOTO_KEY');
-  const directory = process.env.PHOTO_LOCAL_DIR || fileURLToPath(new URL('../../../server/data/photos/', import.meta.url));
+  const directory =
+    process.env.PHOTO_LOCAL_DIR || fileURLToPath(new URL('../../../server/data/photos/', import.meta.url));
   return path.resolve(directory, key.slice('local:photos/'.length));
 }

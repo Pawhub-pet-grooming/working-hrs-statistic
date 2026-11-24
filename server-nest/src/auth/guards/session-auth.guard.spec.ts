@@ -4,7 +4,10 @@ import { createHash } from 'node:crypto';
 import { DbService } from '../../database/db.service.js';
 import { SessionAuthGuard } from './session-auth.guard.js';
 
-function contextWithHeader(authorization: string | undefined): { context: ExecutionContext; request: Record<string, unknown> } {
+function contextWithHeader(authorization: string | undefined): {
+  context: ExecutionContext;
+  request: Record<string, unknown>;
+} {
   const request: Record<string, unknown> = { headers: { authorization } };
   const context = {
     switchToHttp: () => ({ getRequest: () => request }),
@@ -34,7 +37,9 @@ describe('SessionAuthGuard', () => {
   it('rejects with 401 when the session is not found (expired, revoked, or ineligible account)', async () => {
     findFirst.mockResolvedValue(null);
     const { context } = contextWithHeader('Bearer some-token');
-    await expect(guard.canActivate(context)).rejects.toMatchObject({ response: { error: { message: 'Session expired' } } });
+    await expect(guard.canActivate(context)).rejects.toMatchObject({
+      response: { error: { message: 'Session expired' } },
+    });
   });
 
   it('attaches the account and session hash, hashing the raw token the same way as the session row', async () => {

@@ -68,7 +68,8 @@ export class OrganizationService {
         await this.checkRevision(tx, dto.expectedVersion);
 
         const manager = await this.lockManager(tx, dto.managerId);
-        if (!manager || manager.role !== 'MANAGER' || manager.status === 'DISABLED') throw apiError(422, 'Choose a manager');
+        if (!manager || manager.role !== 'MANAGER' || manager.status === 'DISABLED')
+          throw apiError(422, 'Choose a manager');
 
         const shopIds = [...new Set(dto.shopIds)];
         const workerIds = [...new Set(dto.workerIds)];
@@ -97,7 +98,11 @@ export class OrganizationService {
         await this.checkRevision(tx, dto.expectedVersion);
 
         const person = await this.lockPerson(tx, dto.accountId);
-        const eligible = person && ['MANAGER', 'GENERAL_MANAGER'].includes(person.role) && person.status !== 'DISABLED' && person.password_hash;
+        const eligible =
+          person &&
+          ['MANAGER', 'GENERAL_MANAGER'].includes(person.role) &&
+          person.status !== 'DISABLED' &&
+          person.password_hash;
         if (!eligible) throw apiError(422, 'The selected manager must set a password first');
 
         const demoted = await this.demoteExistingGeneralManagers(tx, person!.id);
@@ -127,7 +132,8 @@ export class OrganizationService {
 
         let code = person.login_code;
         const needsCode = !code || !EMPLOYEE_CODE_PATTERN.test(code);
-        if (needsCode && (person.status === 'ACTIVE' || dto.role === 'MANAGER')) code = await this.accounts.allocateEmployeeCode(tx);
+        if (needsCode && (person.status === 'ACTIVE' || dto.role === 'MANAGER'))
+          code = await this.accounts.allocateEmployeeCode(tx);
 
         if (dto.role === 'WORKER') {
           if (person.status !== 'ACTIVE' && code && !EMPLOYEE_CODE_PATTERN.test(code)) code = null;
@@ -142,7 +148,10 @@ export class OrganizationService {
 
         await this.revokeSessions(tx, [person.id]);
 
-        return this.finishMutation(tx, account, 'PERSON_ROLE_CHANGED', person.id, { accountId: person.id, role: dto.role });
+        return this.finishMutation(tx, account, 'PERSON_ROLE_CHANGED', person.id, {
+          accountId: person.id,
+          role: dto.role,
+        });
       }),
     );
   }
@@ -178,7 +187,12 @@ export class OrganizationService {
     );
 
     await tx.email_jobs.create({
-      data: { account_id: person.id, recipient_email: person.email as string, encrypted_payload: payload, kind: 'ACCOUNT_APPROVED' },
+      data: {
+        account_id: person.id,
+        recipient_email: person.email as string,
+        encrypted_payload: payload,
+        kind: 'ACCOUNT_APPROVED',
+      },
     });
   }
 
@@ -194,7 +208,9 @@ export class OrganizationService {
   }
 
   private async queryShops(tx: Prisma.TransactionClient): Promise<ShopRow[]> {
-    return tx.$queryRaw<ShopRow[]>`SELECT s.id,s.name,a.login_code AS code FROM shops s JOIN accounts a ON a.id=s.account_id ORDER BY s.name`;
+    return tx.$queryRaw<
+      ShopRow[]
+    >`SELECT s.id,s.name,a.login_code AS code FROM shops s JOIN accounts a ON a.id=s.account_id ORDER BY s.name`;
   }
 
   private async queryAssignments(tx: Prisma.TransactionClient): Promise<AssignmentRow[]> {
@@ -214,7 +230,9 @@ export class OrganizationService {
   }
 
   private async incrementOrganizationVersion(tx: Prisma.TransactionClient): Promise<{ version: number }[]> {
-    return tx.$queryRaw<{ version: number }[]>`UPDATE organization_state SET version=version+1 WHERE id=true RETURNING version`;
+    return tx.$queryRaw<
+      { version: number }[]
+    >`UPDATE organization_state SET version=version+1 WHERE id=true RETURNING version`;
   }
 
   private async lockManager(tx: Prisma.TransactionClient, managerId: string): Promise<Account | undefined> {
@@ -238,22 +256,37 @@ export class OrganizationService {
     return rows.length;
   }
 
-  private async replaceShopAssignments(tx: Prisma.TransactionClient, managerId: string, shopIds: string[]): Promise<void> {
+  private async replaceShopAssignments(
+    tx: Prisma.TransactionClient,
+    managerId: string,
+    shopIds: string[],
+  ): Promise<void> {
     await tx.$executeRaw`DELETE FROM account_shops WHERE account_id=${managerId}::uuid`;
     await tx.$executeRaw`INSERT INTO account_shops(account_id,shop_id) SELECT ${managerId}::uuid,unnest(${shopIds}::uuid[])`;
   }
 
-  private async replaceWorkerAssignments(tx: Prisma.TransactionClient, managerId: string, workerIds: string[]): Promise<void> {
+  private async replaceWorkerAssignments(
+    tx: Prisma.TransactionClient,
+    managerId: string,
+    workerIds: string[],
+  ): Promise<void> {
     await tx.$executeRaw`DELETE FROM manager_workers WHERE manager_account_id=${managerId}::uuid`;
     await tx.$executeRaw`INSERT INTO manager_workers(manager_account_id,worker_id) SELECT ${managerId}::uuid,unnest(${workerIds}::uuid[])`;
   }
 
-  private async demoteExistingGeneralManagers(tx: Prisma.TransactionClient, exceptAccountId: string): Promise<{ id: string }[]> {
+  private async demoteExistingGeneralManagers(
+    tx: Prisma.TransactionClient,
+    exceptAccountId: string,
+  ): Promise<{ id: string }[]> {
     return tx.$queryRaw<{ id: string }[]>`
       UPDATE accounts SET role='MANAGER' WHERE role='GENERAL_MANAGER' AND id<>${exceptAccountId}::uuid RETURNING id`;
   }
 
-  private async promoteToGeneralManager(tx: Prisma.TransactionClient, accountId: string, approvedByAccountId: string): Promise<void> {
+  private async promoteToGeneralManager(
+    tx: Prisma.TransactionClient,
+    accountId: string,
+    approvedByAccountId: string,
+  ): Promise<void> {
     await tx.$executeRaw`
       UPDATE accounts SET role='GENERAL_MANAGER',status='ACTIVE',approved_at=COALESCE(approved_at,now()),
         approved_by_account_id=COALESCE(approved_by_account_id,${approvedByAccountId}::uuid) WHERE id=${accountId}::uuid`;
@@ -267,7 +300,12 @@ export class OrganizationService {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(820013)`;
   }
 
-  private async ensureWorkerRow(tx: Prisma.TransactionClient, accountId: string, contact: string | null, address: string | null): Promise<void> {
+  private async ensureWorkerRow(
+    tx: Prisma.TransactionClient,
+    accountId: string,
+    contact: string | null,
+    address: string | null,
+  ): Promise<void> {
     await tx.$executeRaw`INSERT INTO workers(account_id,contact,address) VALUES(${accountId}::uuid,${contact},${address}) ON CONFLICT(account_id) DO NOTHING`;
   }
 
@@ -280,7 +318,12 @@ export class OrganizationService {
     await tx.$executeRaw`DELETE FROM manager_workers WHERE worker_id IN(SELECT id FROM workers WHERE account_id=${accountId}::uuid)`;
   }
 
-  private async applyRoleChange(tx: Prisma.TransactionClient, accountId: string, role: 'MANAGER' | 'WORKER', loginCode: string | null): Promise<void> {
+  private async applyRoleChange(
+    tx: Prisma.TransactionClient,
+    accountId: string,
+    role: 'MANAGER' | 'WORKER',
+    loginCode: string | null,
+  ): Promise<void> {
     await tx.$executeRaw`UPDATE accounts SET role=${role},login_code=${loginCode},profile_version=profile_version+1 WHERE id=${accountId}::uuid`;
   }
 }

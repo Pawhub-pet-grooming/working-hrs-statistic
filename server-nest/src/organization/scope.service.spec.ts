@@ -77,7 +77,9 @@ describe('ScopeService', () => {
     managerWorkersCount.mockResolvedValue(0);
     const promise = service.assertWorker(c, account('MANAGER'), 'worker-1');
     await expect(promise).rejects.toMatchObject({ response: { error: { code: 'WORKER_FORBIDDEN' } } });
-    expect(managerWorkersCount).toHaveBeenCalledWith({ where: { manager_account_id: 'account-1', worker_id: 'worker-1' } });
+    expect(managerWorkersCount).toHaveBeenCalledWith({
+      where: { manager_account_id: 'account-1', worker_id: 'worker-1' },
+    });
   });
 
   it('assertWorker resolves when the manager manages that worker', async () => {

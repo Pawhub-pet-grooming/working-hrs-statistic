@@ -61,7 +61,9 @@ export class ShopsService {
   }
 
   private async queryAllShops(): Promise<ShopRow[]> {
-    return this.db.$queryRaw<ShopRow[]>`SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id`;
+    return this.db.$queryRaw<
+      ShopRow[]
+    >`SELECT s.*,a.login_code AS "shopId" FROM shops s JOIN accounts a ON a.id=s.account_id`;
   }
 
   private async queryShopsScopedToManager(role: string, accountId: string): Promise<ShopRow[]> {
@@ -72,7 +74,11 @@ export class ShopsService {
   }
 
   /** Mirrors legacy's `GET /shops/:shopId/employees/:workerId` — a SHOP account looking up one of its employees before clocking them in. */
-  async lookupEmployee(account: Account, shopLoginCode: string, workerLoginCode: string): Promise<Record<string, unknown>> {
+  async lookupEmployee(
+    account: Account,
+    shopLoginCode: string,
+    workerLoginCode: string,
+  ): Promise<Record<string, unknown>> {
     const shop = await this.shopIdByLoginCode(shopLoginCode);
     if (!shop) throw apiError(404, 'Shop not found');
 
@@ -169,7 +175,9 @@ export class ShopsService {
   }
 
   private async queryShopIdByLoginCode(loginCode: string): Promise<{ id: string }[]> {
-    return this.db.$queryRaw<{ id: string }[]>`SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${loginCode}`;
+    return this.db.$queryRaw<
+      { id: string }[]
+    >`SELECT s.id FROM shops s JOIN accounts a ON a.id=s.account_id WHERE a.login_code=${loginCode}`;
   }
 
   private async queryActiveEmployeeByLoginCode(loginCode: string): Promise<EmployeeLookupRow | undefined> {

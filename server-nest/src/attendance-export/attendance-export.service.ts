@@ -3,7 +3,11 @@ import { DateTime } from 'luxon';
 import nodemailer, { type Transporter } from 'nodemailer';
 import PDFDocument from 'pdfkit';
 import { ATTENDANCE_ZONE } from '../attendance/attendance-domain.util.js';
-import { dailyAttendanceHours, totalAttendanceHours, type AttendanceHoursRecord } from '../attendance/attendance-hours.util.js';
+import {
+  dailyAttendanceHours,
+  totalAttendanceHours,
+  type AttendanceHoursRecord,
+} from '../attendance/attendance-hours.util.js';
 import { DbService } from '../database/db.service.js';
 
 const CJK_FONT_PATH = new URL('../../../server/assets/fonts/NotoSansCJKsc-Regular.otf', import.meta.url).pathname;
@@ -73,9 +77,16 @@ export class AttendanceExportService {
         doc.fillColor('#182433').fontSize(17).text('Pawhub attendance / 签到记录', 32, 28, { width });
         doc
           .fontSize(9)
-          .text(`${snapshot.workerName}${snapshot.workerCode ? ` (${snapshot.workerCode})` : ''} · ${snapshot.shopName}`, 32, 56, { width });
+          .text(
+            `${snapshot.workerName}${snapshot.workerCode ? ` (${snapshot.workerCode})` : ''} · ${snapshot.shopName}`,
+            32,
+            56,
+            { width },
+          );
         y = doc.y + 5;
-        doc.fillColor('#667382').text(`${snapshot.fromDate} — ${snapshot.toDate}  |  Pacific/Auckland`, 32, y, { width });
+        doc
+          .fillColor('#667382')
+          .text(`${snapshot.fromDate} — ${snapshot.toDate}  |  Pacific/Auckland`, 32, y, { width });
         y = doc.y + 18;
       }
       pageHeader();
@@ -84,7 +95,10 @@ export class AttendanceExportService {
         const widths = weights.map((w) => (width * w) / weights.reduce((a, b) => a + b, 0));
         function row(cells: unknown[], header = false, index = 0, total = false): void {
           doc.fontSize(header ? 8 : 9);
-          const height = Math.max(30, ...cells.map((cell, i) => doc.heightOfString(String(cell), { width: widths[i]! - 16 }) + 16));
+          const height = Math.max(
+            30,
+            ...cells.map((cell, i) => doc.heightOfString(String(cell), { width: widths[i]! - 16 }) + 16),
+          );
           if (y + height > doc.page.height - 40) {
             doc.addPage();
             pageHeader();
@@ -93,10 +107,18 @@ export class AttendanceExportService {
           doc.rect(32, y, width, height).fill(header || total ? '#e9eef5' : index % 2 ? '#f6f8fb' : '#ffffff');
           let x = 32;
           cells.forEach((cell, i) => {
-            doc.fillColor('#182433').fontSize(header ? 8 : 9).text(String(cell), x + 8, y + 8, { width: widths[i]! - 16 });
+            doc
+              .fillColor('#182433')
+              .fontSize(header ? 8 : 9)
+              .text(String(cell), x + 8, y + 8, { width: widths[i]! - 16 });
             x += widths[i]!;
           });
-          doc.moveTo(32, y + height).lineTo(32 + width, y + height).strokeColor('#dce1e7').lineWidth(0.5).stroke();
+          doc
+            .moveTo(32, y + height)
+            .lineTo(32 + width, y + height)
+            .strokeColor('#dce1e7')
+            .lineWidth(0.5)
+            .stroke();
           y += height;
         }
         if (y + 95 > doc.page.height - 40) {
@@ -106,7 +128,9 @@ export class AttendanceExportService {
         doc.fillColor('#182433').fontSize(12).text(title, 32, y, { width });
         y = doc.y + 8;
         row(headers, true);
-        rows.forEach((cells, index) => row(cells, false, index, title.startsWith('Daily') && index === rows.length - 1));
+        rows.forEach((cells, index) =>
+          row(cells, false, index, title.startsWith('Daily') && index === rows.length - 1),
+        );
         y += 22;
       }
 
@@ -114,10 +138,17 @@ export class AttendanceExportService {
       const total = totalAttendanceHours(days);
       const hours = (day: { valid: boolean; hours: string | null }): string =>
         day.valid ? (day.hours as string) : 'Adjust attendance records / 需要调整签到记录';
-      const pending = (day: { pending: boolean }): string => (day.pending ? 'Changes awaiting manager confirmation / 待 Manager 确认修改' : '—');
+      const pending = (day: { pending: boolean }): string =>
+        day.pending ? 'Changes awaiting manager confirmation / 待 Manager 确认修改' : '—';
       table(
         'Daily working hours / 每日工作小时',
-        [...(snapshot.staffMode ? ['Staff / 员工'] : []), 'Shop / 门店', 'Date / 日期', 'Working hours / 工作小时', 'Status / 状态'],
+        [
+          ...(snapshot.staffMode ? ['Staff / 员工'] : []),
+          'Shop / 门店',
+          'Date / 日期',
+          'Working hours / 工作小时',
+          'Status / 状态',
+        ],
         snapshot.staffMode ? [1.5, 1.5, 1, 2, 3] : [1.5, 1, 2, 3],
         [
           ...days.map((day) => [
@@ -132,9 +163,15 @@ export class AttendanceExportService {
       );
 
       const time = (value: string | Date | null | undefined): string =>
-        value ? DateTime.fromISO(value instanceof Date ? value.toISOString() : value).setZone(ATTENDANCE_ZONE).toFormat('dd/MM/yyyy HH:mm') : '—';
+        value
+          ? DateTime.fromISO(value instanceof Date ? value.toISOString() : value)
+              .setZone(ATTENDANCE_ZONE)
+              .toFormat('dd/MM/yyyy HH:mm')
+          : '—';
       const records = [...snapshot.records].sort(
-        (a, b) => +new Date(a.effective_occurred_at) - +new Date(b.effective_occurred_at) || String(a.id).localeCompare(String(b.id)),
+        (a, b) =>
+          +new Date(a.effective_occurred_at) - +new Date(b.effective_occurred_at) ||
+          String(a.id).localeCompare(String(b.id)),
       );
       table(
         'Attendance records / 签到明细',
@@ -211,7 +248,8 @@ export class AttendanceExportService {
         disableFileAccess: true,
         disableUrlAccess: true,
       });
-      await this.db.$executeRaw`UPDATE attendance_export_jobs SET status='SENT',sent_at=now(),lease_expires_at=NULL WHERE id=${job.id}::uuid`;
+      await this.db
+        .$executeRaw`UPDATE attendance_export_jobs SET status='SENT',sent_at=now(),lease_expires_at=NULL WHERE id=${job.id}::uuid`;
     } catch (e) {
       const err = e as { code?: string; name?: string };
       const status = job.attempt_count >= 4 || err.code === 'STAFF_SCOPE_REVOKED' ? 'FAILED' : 'QUEUED';
@@ -239,7 +277,9 @@ export class AttendanceExportService {
   }
 
   private async assertExportScopeStillValid(job: ExportJobRow): Promise<void> {
-    const [account] = await this.db.$queryRaw<AccountRoleStatusRow[]>`SELECT role,status FROM accounts WHERE id=${job.account_id}::uuid`;
+    const [account] = await this.db.$queryRaw<
+      AccountRoleStatusRow[]
+    >`SELECT role,status FROM accounts WHERE id=${job.account_id}::uuid`;
     if (!account || account.status !== 'ACTIVE' || !STAFF_SCOPE_ROLES.includes(account.role)) {
       throw Object.assign(new Error('Export scope revoked'), { code: 'STAFF_SCOPE_REVOKED' });
     }
@@ -248,7 +288,9 @@ export class AttendanceExportService {
     const permittedRows = await this.db.$queryRaw<WorkerIdRow[]>`
       SELECT worker_id FROM manager_workers WHERE manager_account_id=${job.account_id}::uuid
       UNION SELECT id AS worker_id FROM workers WHERE account_id=${job.account_id}::uuid`;
-    const shopRows = await this.db.$queryRaw<ShopIdRow[]>`SELECT shop_id FROM account_shops WHERE account_id=${job.account_id}::uuid`;
+    const shopRows = await this.db.$queryRaw<
+      ShopIdRow[]
+    >`SELECT shop_id FROM account_shops WHERE account_id=${job.account_id}::uuid`;
 
     const permitted = new Set(permittedRows.map((r) => r.worker_id));
     const shops = new Set(shopRows.map((r) => r.shop_id));

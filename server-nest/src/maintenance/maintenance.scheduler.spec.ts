@@ -89,7 +89,7 @@ describe('MaintenanceScheduler', () => {
       expect(processPhotoRetention).toHaveBeenCalledTimes(1);
     });
 
-    it('is re-entrancy guarded, mirroring legacy\'s retentionRunning flag', async () => {
+    it("is re-entrancy guarded, mirroring legacy's retentionRunning flag", async () => {
       let resolveFirst!: () => void;
       processPhotoRetention.mockReturnValueOnce(
         new Promise((resolve) => {

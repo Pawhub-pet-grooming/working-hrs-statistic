@@ -5,7 +5,13 @@ import { RolesGuard } from '../auth/guards/roles.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import { BACKEND_ROLES, type Account } from '../auth/types.js';
 import { ShopsService } from './shops.service.js';
-import { createShopSchema, shopProfileSchema, uuidParamSchema, type CreateShopDto, type ShopProfileDto } from './shops.schemas.js';
+import {
+  createShopSchema,
+  shopProfileSchema,
+  uuidParamSchema,
+  type CreateShopDto,
+  type ShopProfileDto,
+} from './shops.schemas.js';
 
 /** Mirrors legacy's blanket `app.use("/api/v1/manager", manager)` role gate — every route here requires a backend role. */
 @Controller('api/v1/manager/shops')

@@ -1,6 +1,11 @@
 import { dailyAttendanceHours, totalAttendanceHours, type AttendanceHoursRecord } from './attendance-hours.util.js';
 
-const r = (id: string, time: string, type: string, extra: Partial<AttendanceHoursRecord> = {}): AttendanceHoursRecord => ({
+const r = (
+  id: string,
+  time: string,
+  type: string,
+  extra: Partial<AttendanceHoursRecord> = {},
+): AttendanceHoursRecord => ({
   id,
   effective_occurred_at: `2026-10-26T${time}:00+13:00`,
   sign_type: type,
@@ -9,9 +14,16 @@ const r = (id: string, time: string, type: string, extra: Partial<AttendanceHour
 
 describe('dailyAttendanceHours', () => {
   it('sorts, pairs, rounds each pair and sums integer hundredths', () => {
-    const rows = [r('d', '10:02', 'SIGN_OUT'), r('b', '09:01', 'SIGN_OUT'), r('c', '10:00', 'SIGN_IN'), r('a', '09:00', 'SIGN_IN')];
+    const rows = [
+      r('d', '10:02', 'SIGN_OUT'),
+      r('b', '09:01', 'SIGN_OUT'),
+      r('c', '10:00', 'SIGN_IN'),
+      r('a', '09:00', 'SIGN_IN'),
+    ];
 
-    expect(dailyAttendanceHours(rows)).toEqual([{ date: '2026-10-26', valid: true, hours: '0.05', pending: false, recordCount: 4 }]);
+    expect(dailyAttendanceHours(rows)).toEqual([
+      { date: '2026-10-26', valid: true, hours: '0.05', pending: false, recordCount: 4 },
+    ]);
   });
 
   it('shows adjustment required without a partial total for malformed sequences', () => {

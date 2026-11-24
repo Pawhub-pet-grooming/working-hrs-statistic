@@ -43,7 +43,14 @@ describe('IdempotencyService', () => {
     // First call computes and records the real digest for this (type, body) pair.
     findUnique.mockResolvedValueOnce(null);
     create.mockResolvedValue({ id: 'op-1' });
-    await service.run(tx, 'actor-1', 'op-id-2', 'SHOP_CREATE', { name: 'Shop' }, vi.fn().mockResolvedValue({ cached: true }));
+    await service.run(
+      tx,
+      'actor-1',
+      'op-id-2',
+      'SHOP_CREATE',
+      { name: 'Shop' },
+      vi.fn().mockResolvedValue({ cached: true }),
+    );
     const digestUsed = create.mock.calls[0]![0].data.request_hash as string;
 
     findUnique.mockResolvedValue({ id: 'op-1', request_hash: digestUsed, response_data: { cached: true } });

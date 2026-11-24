@@ -56,7 +56,11 @@ export class GeocodeService {
       Math.abs(latitude) > 90 ||
       Math.abs(longitude) > 180
     ) {
-      throw apiError(503, 'Address lookup returned an invalid location. Please try again later.', 'GEOCODING_UNAVAILABLE');
+      throw apiError(
+        503,
+        'Address lookup returned an invalid location. Please try again later.',
+        'GEOCODING_UNAVAILABLE',
+      );
     }
 
     const coordinates = { latitude, longitude };

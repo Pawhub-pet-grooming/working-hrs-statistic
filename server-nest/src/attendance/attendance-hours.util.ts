@@ -30,9 +30,7 @@ export interface TotalHours {
 export function dailyAttendanceHours(records: AttendanceHoursRecord[]): DailyHours[] {
   const days = groupByLocalDate(records);
 
-  return [...days]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, rows]) => buildDailyHours(date, rows));
+  return [...days].sort(([a], [b]) => a.localeCompare(b)).map(([date, rows]) => buildDailyHours(date, rows));
 }
 
 /** Mirrors legacy's `totalAttendanceHours`. */
@@ -44,12 +42,18 @@ export function totalAttendanceHours(days: DailyHours[]): TotalHours {
   return { valid, hours: valid ? (hundredths / 100).toFixed(2) : null, pending: days.some((day) => day.pending) };
 }
 
-function groupByLocalDate(records: AttendanceHoursRecord[]): Map<string, { record: AttendanceHoursRecord; time: number }[]> {
+function groupByLocalDate(
+  records: AttendanceHoursRecord[],
+): Map<string, { record: AttendanceHoursRecord; time: number }[]> {
   const days = new Map<string, { record: AttendanceHoursRecord; time: number }[]>();
 
   for (const record of records) {
     const time = DateTime.fromISO(
-      String(record.effective_occurred_at instanceof Date ? record.effective_occurred_at.toISOString() : record.effective_occurred_at),
+      String(
+        record.effective_occurred_at instanceof Date
+          ? record.effective_occurred_at.toISOString()
+          : record.effective_occurred_at,
+      ),
       { zone: ATTENDANCE_ZONE },
     );
     const date = time.isValid ? (time.toISODate() as string) : 'Invalid date';

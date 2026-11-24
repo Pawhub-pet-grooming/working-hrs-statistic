@@ -68,7 +68,11 @@ export class ReportsService {
           };
 
           await tx.report_exports.create({
-            data: { requested_by_account_id: account.id, filters: dto, snapshot_data: snap as unknown as Prisma.InputJsonValue },
+            data: {
+              requested_by_account_id: account.id,
+              filters: dto,
+              snapshot_data: snap as unknown as Prisma.InputJsonValue,
+            },
           });
 
           return snap;
@@ -95,7 +99,9 @@ export class ReportsService {
       for (const g of snapshot.groups) {
         doc
           .moveDown()
-          .text(`${g.workerId} | ${g.shopId} | ${g.confirmedHrs} hrs | pending ${g.pendingSegmentCount} | errors ${g.invalidSegmentCount}`);
+          .text(
+            `${g.workerId} | ${g.shopId} | ${g.confirmedHrs} hrs | pending ${g.pendingSegmentCount} | errors ${g.invalidSegmentCount}`,
+          );
       }
       if (dto.reportType === 'ATTENDANCE') {
         for (const r of snapshot.records) {
@@ -104,7 +110,9 @@ export class ReportsService {
             .text(
               `${r.workerId} ${r.shopId} ${r.sign_type}\nOriginal: ${DateTime.fromJSDate(new Date(r.original_occurred_at), { zone: ATTENDANCE_ZONE }).toFormat('yyyy-MM-dd HH:mm:ss')}\nConfirmed: ${
                 r.confirmed_occurred_at
-                  ? DateTime.fromJSDate(new Date(r.confirmed_occurred_at), { zone: ATTENDANCE_ZONE }).toFormat('yyyy-MM-dd HH:mm:ss')
+                  ? DateTime.fromJSDate(new Date(r.confirmed_occurred_at), { zone: ATTENDANCE_ZONE }).toFormat(
+                      'yyyy-MM-dd HH:mm:ss',
+                    )
                   : 'Pending'
               }`,
             );

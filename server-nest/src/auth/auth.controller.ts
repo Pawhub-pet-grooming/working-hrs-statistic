@@ -81,7 +81,8 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 900_000 } })
   async changePassword(@CurrentAccount() account: Account, @Body() body: unknown): Promise<{ data: unknown }> {
     // The SHOP-fixed-password check must run before body validation, exactly like the legacy handler.
-    if (account.role === 'SHOP') throw apiError(403, 'Shop accounts use the fixed login password', 'SHOP_FIXED_PASSWORD');
+    if (account.role === 'SHOP')
+      throw apiError(403, 'Shop accounts use the fixed login password', 'SHOP_FIXED_PASSWORD');
 
     const result = changePasswordSchema.safeParse(body);
     if (!result.success) throw apiError(422, 'Invalid request fields', 'VALIDATION_ERROR');

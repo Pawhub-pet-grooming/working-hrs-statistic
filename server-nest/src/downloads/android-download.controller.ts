@@ -22,7 +22,11 @@ export class AndroidDownloadController {
   }
 
   @Get('apk')
-  async download(@Query('sha256') sha256: string | undefined, @Res() res: Response, @Next() next: NextFunction): Promise<void> {
+  async download(
+    @Query('sha256') sha256: string | undefined,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ): Promise<void> {
     try {
       const hash = sha256 || (await this.downloads.current()).sha256;
       if (!this.downloads.isValidHash(hash)) {
