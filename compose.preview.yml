@@ -3,7 +3,12 @@ services:
     image: node:22-bookworm-slim
     user: "${PAWHUB_UID}:${PAWHUB_GID}"
     working_dir: /app
-    command: ["node", "server/src/index.js"]
+    # server-nest is the real app now: it mounts the legacy server/src/app.js internally for
+    # anything not yet migrated (see server-nest/src/legacy-gateway.ts), same as production's
+    # deploy/pawhub.service. Run `npm ci && npm run build -w server-nest` on the host before
+    # `docker compose up` — this image has no build step of its own, it just runs the host's
+    # already-built checkout read-only (see the `.:/app:ro` mount below).
+    command: ["node", "server-nest/dist/main.js"]
     env_file:
       - .env.preview
     environment:
