@@ -54,6 +54,13 @@ describe('MaintenanceScheduler', () => {
     });
   });
 
+  describe('onApplicationShutdown', () => {
+    it('does not throw, so app.close() can always complete', () => {
+      expect(() => scheduler.onApplicationShutdown('SIGTERM')).not.toThrow();
+      expect(() => scheduler.onApplicationShutdown()).not.toThrow();
+    });
+  });
+
   describe('runMaintenance', () => {
     it('rebuilds every worker sequentially, then drains one mail job and one export job', async () => {
       findMany.mockResolvedValue([{ id: 'worker-1' }, { id: 'worker-2' }]);

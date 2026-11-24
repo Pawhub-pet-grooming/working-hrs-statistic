@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { AttendanceExportService } from '../attendance-export/attendance-export.service.js';
 import { AttendanceService } from '../attendance/attendance.service.js';
@@ -20,7 +20,7 @@ export const PHOTO_RETENTION_TICK_NAME = 'photo-retention-tick';
  * `enableShutdownHooks` on the app itself).
  */
 @Injectable()
-export class MaintenanceScheduler implements OnApplicationBootstrap {
+export class MaintenanceScheduler implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(MaintenanceScheduler.name);
   private photoRetentionRunning = false;
 
@@ -41,6 +41,17 @@ export class MaintenanceScheduler implements OnApplicationBootstrap {
     const photoRetentionTick = setInterval(() => void this.runPhotoRetention(), PHOTO_RETENTION_INTERVAL_MS);
     photoRetentionTick.unref();
     this.schedulerRegistry.addInterval(PHOTO_RETENTION_TICK_NAME, photoRetentionTick);
+  }
+
+  /**
+   * Mirrors legacy's SIGTERM handler clearing `maintenance`/`photoRetention` before closing the
+   * server and the DB pool. By the time this fires, `@nestjs/schedule`'s own
+   * `beforeApplicationShutdown` hook has already cleared both registered ticks (it runs earlier
+   * in `app.close()`'s lifecycle than `onApplicationShutdown`) — this just reports it, the
+   * equivalent of legacy having nothing left to log once its own clearInterval calls return.
+   */
+  onApplicationShutdown(signal?: string): void {
+    this.logger.log(`Maintenance scheduler stopped${signal ? ` (${signal})` : ''}`);
   }
 
   /** Mirrors legacy's 60s tick: per-worker `work_segments` rebuild, then one mail job, then one export job. */
