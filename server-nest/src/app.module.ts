@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
@@ -14,6 +15,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { DownloadsModule } from './downloads/downloads.module.js';
 import { IdempotencyModule } from './idempotency/idempotency.module.js';
 import { MailModule } from './mail/mail.module.js';
+import { MaintenanceModule } from './maintenance/maintenance.module.js';
 import { MeModule } from './me/me.module.js';
 import { OrganizationModule } from './organization/organization.module.js';
 import { PhotosModule } from './photos/photos.module.js';
@@ -28,6 +30,7 @@ import { ReportsModule } from './reports/reports.module.js';
     // Mirrors the legacy apiLimiter's 300/60s default; auth routes override it per-endpoint to
     // match the legacy per-route limiters exactly (see AuthController).
     ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 300 }] }),
+    ScheduleModule.forRoot(),
     DatabaseModule,
     AuditModule,
     IdempotencyModule,
@@ -38,6 +41,7 @@ import { ReportsModule } from './reports/reports.module.js';
     AttendanceExportModule,
     DownloadsModule,
     MailModule,
+    MaintenanceModule,
     ReportsModule,
     PhotosModule,
   ],
