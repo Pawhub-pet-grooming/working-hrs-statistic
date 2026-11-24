@@ -776,9 +776,11 @@ test(
       assert.equal(finalRetained.photo_id, beforeRemoval.photo_id);
       assert.equal((await get(`/manager/attendance/${retained.id}/history`)).status, 200);
       if (photoId) assert.equal((await get(`/photos/${photoId}`)).status, 200);
-      // Manual entries use the same actor/scope checks and require approval.
+      // Manual entries use the same actor/scope checks and require approval. A fixed October date
+      // (not currentDay, which tracks the real wall clock) keeps this inside employeeQuery's
+      // hardcoded 2026-10 range below regardless of which day the suite actually runs on.
       const addBody = { operationId: randomUUID(), action: "ADD", shopId: shopCode, type: "SIGN_IN",
-        occurredAt: DateTime.fromISO(currentDay, { zone: "Pacific/Auckland" }).set({ hour: 8 }).toISO() };
+        occurredAt: DateTime.fromISO("2026-10-20", { zone: "Pacific/Auckland" }).set({ hour: 8 }).toISO() };
       const added = await post("/attendance-adjustments", addBody, employeeToken);
       assert.equal(added.status, 201);
       assert.deepEqual((await post("/attendance-adjustments", addBody, employeeToken)).data, added.data);
