@@ -17,8 +17,11 @@ cd server
 npm run migrate
 # Set ADMIN_EMAIL / ADMIN_PASSWORD in .env for the one-time owner bootstrap.
 npm run bootstrap
-npm run dev
+cd ../server-nest
+npm run start:dev
 ```
+
+`server-nest` is the real local API entrypoint now: it serves every migrated route itself and falls through to the legacy Express app (`server/src/app.js`) for anything not yet migrated, mirroring production. Running `server`'s own `npm run dev`/`npm start` directly only serves what's left in the legacy app (a health check and a couple of middlewares at this point) and will not exercise the app end to end. From the repository root, `npm run dev:api` is a shortcut for the `server-nest` command above.
 
 In another terminal, from the repository root run `npm run dev:web`. API default port is 3000 and website development port is 5173. Use the existing checkout; no worktree is needed.
 
@@ -56,9 +59,9 @@ Set CHROMIUM_PATH if Chromium is installed elsewhere. It checks login, month fil
 
 1. Use Ubuntu 24.04, Node.js 24 LTS, PostgreSQL 17, Nginx and Certbot. Start with 2 GB RAM. Bind PostgreSQL to localhost; EC2 security group exposes HTTPS and SSH restricted to your IP, never 5432/3000 to the Internet.
 2. Create a dedicated `pawhub` OS user, PostgreSQL role and `pawhub` database. Create the database password securely, URL-encode it in DATABASE_URL. Install Node from its official supported distribution, preserving signature/TLS verification.
-3. Copy this checkout to `/opt/pawhub`, install using `npm ci --omit=dev`. Put runtime settings from `server/.env.example` in `/etc/pawhub/server.env`, readable only by root and the pawhub service group. Create `/var/lib/pawhub` owned by pawhub. No secrets in Git or S3 website files.
+3. Copy this checkout to `/opt/pawhub`, install with plain `npm ci` (not `--omit=dev`: `server-nest`'s build and its Prisma client generation both need devDependencies). Put runtime settings from `server/.env.example` in `/etc/pawhub/server.env`, readable only by root and the pawhub service group. Create `/var/lib/pawhub` owned by pawhub. No secrets in Git or S3 website files.
 4. From `/opt/pawhub/server`, load the environment securely and run `npm run migrate`, then `npm run bootstrap` once. Remove ADMIN_PASSWORD from normal runtime settings afterwards. Migrations preserve existing data and record their applied version.
-5. Install `deploy/pawhub.service` into `/etc/systemd/system/`, verify the Node path, then `sudo systemctl daemon-reload` and `sudo systemctl enable --now pawhub`. Inspect `journalctl -u pawhub` for failures.
+5. Run `npm run build -w server-nest` from `/opt/pawhub` — this is the API process now (it mounts the legacy `server/src/app.js` internally for anything not yet migrated, so both directories must stay checked out side by side). Re-run this build after every deploy, before restarting the service. Install `deploy/pawhub.service` into `/etc/systemd/system/`, verify the Node path, then `sudo systemctl daemon-reload` and `sudo systemctl enable --now pawhub`. Inspect `journalctl -u pawhub` for failures. See `deploy/ROLLBACK.md` if a deploy needs to be reverted.
 6. Use `deploy/nginx.conf`, replacing the API hostname. Verify `sudo nginx -t`, then use Certbot to obtain HTTPS for that hostname and redirect HTTP to HTTPS. Set `TRUST_PROXY=1` only when the API is accessible solely through the trusted local Nginx proxy.
 7. Check `/api/v1/health`, sign in, create a shop/person, and exercise monthly queries/validation before accepting real records.
 

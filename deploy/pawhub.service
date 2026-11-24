@@ -1,5 +1,5 @@
 [Unit]
-Description=Pawhub Express API
+Description=Pawhub API (NestJS, strangler-fig over legacy Express)
 After=network-online.target postgresql.service
 Wants=network-online.target
 
@@ -7,10 +7,14 @@ Wants=network-online.target
 Type=simple
 User=pawhub
 Group=pawhub
-WorkingDirectory=/opt/pawhub/server
+# server-nest mounts the legacy Express app (../server/src/app.js) as a fallback for any
+# route not yet migrated, so /opt/pawhub/server must stay checked out alongside this directory
+# even though the process itself now starts from here. Run `npm run build -w server-nest`
+# (needs devDependencies, so don't `npm ci --omit=dev`) after every deploy before restarting.
+WorkingDirectory=/opt/pawhub/server-nest
 Environment=NODE_ENV=production
 EnvironmentFile=/etc/pawhub/server.env
-ExecStart=/usr/bin/node src/index.js
+ExecStart=/usr/bin/node dist/main.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
