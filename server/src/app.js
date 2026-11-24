@@ -17,10 +17,8 @@ import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { DateTime } from "luxon";
-import PDFDocument from "pdfkit";
 import { pool, transaction } from "./db.js";
-import { monthBounds, localDate, zone } from "./domain.js";
+import { localDate } from "./domain.js";
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
@@ -169,8 +167,6 @@ async function assertRecordScope(c, actor, shopId, workerId) {
   if (await allowed(c, actor, shopId)) return;
   return assertWorker(c, actor, workerId);
 }
-const scopeSql =
-  "($1 IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=$2))";
 // shops listing (/shops, /manager/shops), shop creation (POST /manager/shops) and shop profile
 // edit (POST /manager/shops/:id/profile, in organization.js) migrated to server-nest's
 // ShopsController/ManagerShopsController (Epic 3).
@@ -252,116 +248,18 @@ export async function rebuild(c, workerId) {
     );
   }
 }
-function filters(req) {
-  const p = monthBounds(req.query.month);
-  return [
-    req.account.role,
-    req.account.id,
-    p.start,
-    p.end,
-    req.query.shopId || null,
-    req.query.workerId || null,
-  ];
-}
-const recordScopeSql = "($1 IN('SUPER_MANAGER','GENERAL_MANAGER') OR w.account_id=$2 OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=$2) OR EXISTS(SELECT 1 FROM manager_workers mw WHERE mw.worker_id=w.id AND mw.manager_account_id=$2))";
-const filtered = `FROM attendance_records r JOIN workers w ON w.id=r.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=r.shop_id JOIN accounts sa ON sa.id=s.account_id WHERE ${recordScopeSql} AND r.effective_occurred_at >= $3 AND r.effective_occurred_at < $4 AND ($5::text IS NULL OR sa.login_code=$5) AND ($6::text IS NULL OR wa.login_code=$6)`;
-async function records(req, c = pool) {
-  const f = filters(req);
-  return (
-    await c.query(
-      `SELECT r.*,(SELECT x.after_type FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING' LIMIT 1) AS pending_sign_type,wa.name AS worker_name,wa.login_code AS "workerId",s.name AS shop_name,sa.login_code AS "shopId",EXISTS(SELECT 1 FROM attendance_adjustments x WHERE x.record_id=r.id AND x.status='PENDING') AS pending ${filtered} AND ($1='SUPER_MANAGER' OR NOT r.effective_deleted) ORDER BY r.effective_occurred_at,r.id`,
-      f,
-    )
-  ).rows;
-}
-async function summary(req, c = pool) {
-  const f = filters(req);
-  return (
-    await c.query(
-      `SELECT wa.login_code AS "workerId",wa.name AS worker_name,sa.login_code AS "shopId",s.name AS shop_name,COALESCE(sum(g.hrs) FILTER(WHERE g.status='CONFIRMED'),0)::numeric(12,2)::text AS "confirmedHrs",count(*) FILTER(WHERE g.status='PENDING')::int AS "pendingSegmentCount",count(*) FILTER(WHERE g.status='INVALID')::int AS "invalidSegmentCount" FROM work_segments g JOIN workers w ON w.id=g.worker_id JOIN accounts wa ON wa.id=w.account_id JOIN shops s ON s.id=g.shop_id JOIN accounts sa ON sa.id=s.account_id LEFT JOIN attendance_records rr ON rr.id=COALESCE(g.sign_in_record_id,g.sign_out_record_id) WHERE ${recordScopeSql} AND COALESCE(g.start_at,rr.effective_occurred_at)>=$3 AND COALESCE(g.start_at,rr.effective_occurred_at)<$4 AND ($5::text IS NULL OR sa.login_code=$5) AND ($6::text IS NULL OR wa.login_code=$6) GROUP BY wa.login_code,wa.name,sa.login_code,s.name ORDER BY wa.name`,
-      f,
-    )
-  ).rows;
-}
 // GET /manager/attendance (paginated) and /summary migrated to server-nest's
-// ManagerAttendanceController (Epic 3). records()/summary()/filters()/recordScopeSql stay —
-// POST /manager/reports/pdf (ReportsModule, not yet migrated) still calls them.
+// ManagerAttendanceController (Epic 3). POST /manager/reports/pdf migrated to server-nest's
+// ReportsController (Epic 3) — records()/summary()/filters()/recordScopeSql/scopeSql, its only
+// remaining callers, were deleted as dead code in the same change.
 // GET [/manager/attendance/:id/history, /attendance/:id/history], GET /manager/validations,
 // POST /manager/validations/:id/decision, and POST /manager/attendance/:id/corrections migrated
 // to server-nest's AttendanceController/ManagerAttendanceController/ValidationsController
-// (Epic 3). assertRecordScope()/rebuild() stay — reports/pdf, the photos route, and index.js's
-// maintenance loop still call them.
+// (Epic 3). assertRecordScope()/rebuild() stay — the photos route and index.js's maintenance
+// loop still call them.
 // POST /attendance (clock in/out) and GET /attendance/status migrated to server-nest's
 // AttendanceController (Epic 3). appScope()/rebuild() stay — the not-yet-migrated personal
 // summary and export routes below still use them.
-app.post("/api/v1/manager/reports/pdf", async (req, res) => {
-  const b = z
-    .object({
-      operationId: uuid,
-      month: z.string(),
-      shopId: z.string().optional(),
-      workerId: z.string().optional(),
-      reportType: z.enum(["ATTENDANCE", "TIMESHEET"]),
-    })
-    .parse(req.body);
-  monthBounds(b.month);
-  const reportReq = { account: req.account, query: b };
-  const data = await transaction(async (c) => {
-    await c.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-    return idem(c, req.account, b, "PDF", async () => {
-      const snapshot = {
-        records: await records(reportReq, c),
-        groups: await summary(reportReq, c),
-        period: monthBounds(b.month),
-        scopeIds: (
-          await c.query(
-            `SELECT s.id FROM shops s JOIN accounts sa ON sa.id=s.account_id WHERE ${scopeSql} AND ($3::text IS NULL OR sa.login_code=$3)`,
-            [req.account.role, req.account.id, b.shopId || null],
-          )
-        ).rows.map((x) => x.id),
-      };
-      const r = (
-        await c.query(
-          "INSERT INTO report_exports(requested_by_account_id,filters,snapshot_data) VALUES($1,$2,$3) RETURNING id",
-          [req.account.id, b, snapshot],
-        )
-      ).rows[0];
-      return { reportId: r.id, snapshot };
-    });
-  });
-  for (const record of data.snapshot.records)
-    await assertRecordScope(pool, req.account, record.shop_id, record.worker_id);
-  for (const group of data.snapshot.groups) {
-    const ids = (await pool.query("SELECT w.id AS worker_id,s.id AS shop_id FROM workers w JOIN accounts wa ON wa.id=w.account_id CROSS JOIN shops s JOIN accounts sa ON sa.id=s.account_id WHERE wa.login_code=$1 AND sa.login_code=$2", [group.workerId, group.shopId])).rows[0];
-    if (!ids) fail(403, "Report scope unavailable");
-    await assertRecordScope(pool, req.account, ids.shop_id, ids.worker_id);
-  }
-  res.type("pdf");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="Pawhub-${b.month}.pdf"`,
-  );
-  const doc = new PDFDocument({ margin: 40 });
-  doc.pipe(res);
-  doc.fontSize(18).text(`Pawhub ${b.reportType} - ${b.month}`);
-  doc
-    .fontSize(10)
-    .text("Timezone: Pacific/Auckland. Pending/invalid periods excluded.");
-  for (const g of data.snapshot.groups)
-    doc
-      .moveDown()
-      .text(
-        `${g.workerId} | ${g.shopId} | ${g.confirmedHrs} hrs | pending ${g.pendingSegmentCount} | errors ${g.invalidSegmentCount}`,
-      );
-  if (b.reportType === "ATTENDANCE")
-    for (const r of data.snapshot.records)
-      doc
-        .moveDown()
-        .text(
-          `${r.workerId} ${r.shopId} ${r.sign_type}\nOriginal: ${DateTime.fromJSDate(new Date(r.original_occurred_at), { zone }).toFormat("yyyy-MM-dd HH:mm:ss")}\nConfirmed: ${r.confirmed_occurred_at ? DateTime.fromJSDate(new Date(r.confirmed_occurred_at), { zone }).toFormat("yyyy-MM-dd HH:mm:ss") : "Pending"}`,
-        );
-  doc.end();
-});
 // GET /manager/staff-attendance/staff, GET /manager/attendance/locations, and the shared
 // GET /attendance + /manager/staff-attendance listing migrated to server-nest's
 // StaffAttendanceController/ManagerAttendanceController/AttendanceController (Epic 3).

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { CurrentAccount } from '../auth/decorators/current-account.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { RolesGuard } from '../auth/guards/roles.guard.js';
@@ -29,6 +29,7 @@ export class ValidationsController {
   }
 
   @Post(':id/decision')
+  @HttpCode(200)
   async decide(
     @CurrentAccount() account: Account,
     @Param('id', { schema: recordIdParamSchema }) id: string,

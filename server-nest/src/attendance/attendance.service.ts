@@ -164,6 +164,13 @@ interface ManagerAttendanceRecordRow {
   shop_id: string;
   workerId: string | null;
   shopId: string | null;
+  sign_type: string;
+  original_occurred_at: Date;
+  confirmed_occurred_at: Date | null;
+}
+
+interface ReportScopeShopIdRow {
+  id: string;
 }
 
 interface ManagerSummaryGroupRow {
@@ -499,6 +506,39 @@ export class AttendanceService {
     const groups = await this.queryManagerSummary(this.db, account.role, account.id, period, query.shopId ?? null, query.workerId ?? null);
 
     return { groups, period };
+  }
+
+  /**
+   * Mirrors legacy's `records()` + `summary()` helpers — the same scope scheme as
+   * `managerRecordsPage`/`managerSummary`, unsliced, for ReportsModule's PDF export. Takes an
+   * explicit client so it can run inside the caller's `REPEATABLE READ` transaction.
+   */
+  async reportSnapshot(
+    c: Queryable,
+    account: Account,
+    month: string,
+    shopCode: string | null,
+    workerCode: string | null,
+  ): Promise<{ records: ManagerAttendanceRecordRow[]; groups: ManagerSummaryGroupRow[]; period: MonthBounds }> {
+    const period = monthBounds(month);
+    const records = await this.queryManagerRecords(c, account.role, account.id, period, shopCode, workerCode);
+    const groups = await this.queryManagerSummary(c, account.role, account.id, period, shopCode, workerCode);
+    return { records, groups, period };
+  }
+
+  /** Mirrors legacy's shop-scope query backing `scopeSql` in the reports/pdf route. */
+  async reportScopeShopIds(c: Queryable, account: Account, shopCode: string | null): Promise<string[]> {
+    const rows = await this.queryReportScopeShopIds(c, account.role, account.id, shopCode);
+    return rows.map((r) => r.id);
+  }
+
+  /** Mirrors the inline lookup in legacy's reports/pdf route: resolves a summary group's codes back to raw ids for `assertRecordScope`. */
+  async resolveWorkerShopIds(workerCode: string, shopCode: string): Promise<{ worker_id: string; shop_id: string } | undefined> {
+    const rows = await this.db.$queryRaw<{ worker_id: string; shop_id: string }[]>`
+      SELECT w.id AS worker_id,s.id AS shop_id FROM workers w JOIN accounts wa ON wa.id=w.account_id
+      CROSS JOIN shops s JOIN accounts sa ON sa.id=s.account_id
+      WHERE wa.login_code=${workerCode} AND sa.login_code=${shopCode}`;
+    return rows[0];
   }
 
   /** Mirrors legacy's `GET [/manager/attendance/:id/history, /attendance/:id/history]`. */
@@ -1281,6 +1321,14 @@ export class AttendanceService {
         AND COALESCE(g.start_at,rr.effective_occurred_at)>=${period.start}::timestamptz AND COALESCE(g.start_at,rr.effective_occurred_at)<${period.end}::timestamptz
         AND (${shopCode}::text IS NULL OR sa.login_code=${shopCode}) AND (${workerCode}::text IS NULL OR wa.login_code=${workerCode})
       GROUP BY wa.login_code,wa.name,sa.login_code,s.name ORDER BY wa.name`;
+  }
+
+  /** Mirrors legacy's `scopeSql` (narrower than `recordScopeSql` — no `manager_workers` fallback) used to resolve `reports/pdf`'s `scopeIds`. */
+  private async queryReportScopeShopIds(c: Queryable, role: string, accountId: string, shopCode: string | null): Promise<ReportScopeShopIdRow[]> {
+    return c.$queryRaw<ReportScopeShopIdRow[]>`
+      SELECT s.id FROM shops s JOIN accounts sa ON sa.id=s.account_id
+      WHERE (${role} IN('SUPER_MANAGER','GENERAL_MANAGER') OR EXISTS(SELECT 1 FROM account_shops ac WHERE ac.shop_id=s.id AND ac.account_id=${accountId}::uuid))
+        AND (${shopCode}::text IS NULL OR sa.login_code=${shopCode})`;
   }
 
   private async checkDailyCountExpectation(

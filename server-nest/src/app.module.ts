@@ -14,6 +14,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { IdempotencyModule } from './idempotency/idempotency.module.js';
 import { MeModule } from './me/me.module.js';
 import { OrganizationModule } from './organization/organization.module.js';
+import { ReportsModule } from './reports/reports.module.js';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { OrganizationModule } from './organization/organization.module.js';
     MeModule,
     AttendanceModule,
     AttendanceExportModule,
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [
