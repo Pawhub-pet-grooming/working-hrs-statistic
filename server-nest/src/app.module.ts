@@ -12,6 +12,7 @@ import { envSchema } from './config/env.schema.js';
 import { LoggingInterceptor } from './common/logging.interceptor.js';
 import { DatabaseModule } from './database/database.module.js';
 import { IdempotencyModule } from './idempotency/idempotency.module.js';
+import { MailModule } from './mail/mail.module.js';
 import { MeModule } from './me/me.module.js';
 import { OrganizationModule } from './organization/organization.module.js';
 import { PhotosModule } from './photos/photos.module.js';
@@ -34,6 +35,7 @@ import { ReportsModule } from './reports/reports.module.js';
     MeModule,
     AttendanceModule,
     AttendanceExportModule,
+    MailModule,
     ReportsModule,
     PhotosModule,
   ],
