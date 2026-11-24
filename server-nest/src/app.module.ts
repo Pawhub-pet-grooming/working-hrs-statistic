@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { envSchema } from './config/env.schema.js';
 import { LoggingInterceptor } from './common/logging.interceptor.js';
 import { DatabaseModule } from './database/database.module.js';
+import { DownloadsModule } from './downloads/downloads.module.js';
 import { IdempotencyModule } from './idempotency/idempotency.module.js';
 import { MailModule } from './mail/mail.module.js';
 import { MeModule } from './me/me.module.js';
@@ -35,6 +36,7 @@ import { ReportsModule } from './reports/reports.module.js';
     MeModule,
     AttendanceModule,
     AttendanceExportModule,
+    DownloadsModule,
     MailModule,
     ReportsModule,
     PhotosModule,

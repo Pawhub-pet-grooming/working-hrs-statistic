@@ -1,5 +1,3 @@
-import { mountAndroidDownload } from "./android-download.js";
-import { mountStoreDownload } from "./store-download.js";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -25,18 +23,22 @@ app.get("/api/v1/health", async (req, res) => {
   await pool.query("SELECT 1");
   res.json({ data: { status: "ok" } });
 });
-mountAndroidDownload(app);
 // auth/login, auth/register, auth/password-links(/consume) migrated to server-nest's
 // AuthController (Epic 2) — see server-nest/src/auth/auth.service.ts. They used to be
 // defined here, before this middleware, so a request never reached the auth check below;
 // now that they live in server-nest, this middleware must explicitly let them fall through
 // to it instead of rejecting them as unauthenticated.
+// downloads/android(/apk) migrated to server-nest's AndroidDownloadController (Epic 3) — they
+// used to be mounted here, also before this middleware, for the same reason: these routes are
+// fully public (no sign-in required) and must keep falling through instead of getting 401'd.
 const publicAuthPaths = new Set([
   "/auth/login",
   "/manager/auth/login",
   "/auth/register",
   "/auth/password-links",
   "/auth/password-links/consume",
+  "/downloads/android",
+  "/downloads/android/apk",
 ]);
 app.use("/api/v1", async (req, res, next) => {
   if (publicAuthPaths.has(req.path)) return next();
@@ -94,7 +96,7 @@ function manager(req, res, next) {
   next();
 }
 app.use("/api/v1/manager", manager);
-mountStoreDownload(app);
+// downloads/store-android(/link) migrated to server-nest's StoreDownloadController (Epic 3).
 // shops listing (/shops, /manager/shops), shop creation (POST /manager/shops) and shop profile
 // edit (POST /manager/shops/:id/profile, in organization.js) migrated to server-nest's
 // ShopsController/ManagerShopsController (Epic 3).
