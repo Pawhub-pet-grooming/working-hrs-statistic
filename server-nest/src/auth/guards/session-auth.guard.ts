@@ -1,8 +1,10 @@
 import { Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import type { Request } from 'express';
 import { apiError } from '../../common/api-error.js';
 import { DbService } from '../../database/db.service.js';
+import type { Env } from '../../config/env.schema.js';
 
 /**
  * Replaces the legacy `app.use("/api/v1", ...)` session middleware: validates the bearer
@@ -11,7 +13,10 @@ import { DbService } from '../../database/db.service.js';
  */
 @Injectable()
 export class SessionAuthGuard implements CanActivate {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly config: ConfigService<Env, true>,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<Request>();
@@ -37,6 +42,11 @@ export class SessionAuthGuard implements CanActivate {
 
     req.account = session.accounts;
     req.sessionHash = tokenHash;
+
+    // Sliding expiration: an active session never expires while the device keeps checking in;
+    // only a device that goes unused for SESSION_HOURS is forced back to the password screen.
+    const expiresAt = new Date(Date.now() + this.config.get('SESSION_HOURS', { infer: true }) * 3600000);
+    await this.db.sessions.update({ where: { id: session.id }, data: { expires_at: expiresAt } });
 
     return true;
   }

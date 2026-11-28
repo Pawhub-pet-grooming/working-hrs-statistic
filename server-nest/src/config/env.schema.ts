@@ -8,7 +8,7 @@ export const envSchema = z.object({
   // it takes priority over DATABASE_URL so both apps run against the same database.
   TEST_DATABASE_URL: z.string().optional(),
   WEB_ORIGIN: z.string().min(1).optional(),
-  SESSION_HOURS: z.coerce.number().int().positive().default(12),
+  SESSION_HOURS: z.coerce.number().int().positive().default(168),
   AWS_REGION: z.string().optional(),
   PHOTO_BUCKET: z.string().optional(),
   MAIL_FROM: z.string().optional(),

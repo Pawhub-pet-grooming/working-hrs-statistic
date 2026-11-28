@@ -52,6 +52,12 @@ app.use("/api/v1", async (req, res, next) => {
     if (!r.rowCount) fail(401, "Session expired");
     req.account = r.rows[0];
     req.sessionHash = hash(t);
+    // Sliding expiration: an active session never expires while the device keeps checking in;
+    // only a device that goes unused for SESSION_HOURS is forced back to the password screen.
+    await pool.query(
+      "UPDATE sessions SET expires_at=now()+($2 || ' hours')::interval WHERE token_hash=$1",
+      [req.sessionHash, Number(process.env.SESSION_HOURS) || 168],
+    );
     next();
   } catch (e) {
     next(e);

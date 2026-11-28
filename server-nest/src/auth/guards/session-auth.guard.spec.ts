@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { HttpException, type ExecutionContext } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DbService } from '../../database/db.service.js';
@@ -18,12 +19,18 @@ function contextWithHeader(authorization: string | undefined): {
 describe('SessionAuthGuard', () => {
   let guard: SessionAuthGuard;
   const findFirst = vi.fn();
+  const update = vi.fn();
 
   beforeEach(async () => {
     findFirst.mockReset();
+    update.mockReset();
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [SessionAuthGuard, { provide: DbService, useValue: { sessions: { findFirst } } }],
+      providers: [
+        SessionAuthGuard,
+        { provide: DbService, useValue: { sessions: { findFirst, update } } },
+        { provide: ConfigService, useValue: { get: () => 168 } },
+      ],
     }).compile();
     guard = module.get(SessionAuthGuard);
   });
